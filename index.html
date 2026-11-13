@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no" />
+    <link rel="icon" href="data:," />
+    <title>Agent Wall</title>
+    <style>
+      body { margin: 0; background: #0d1117; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+      #intro {
+        position: fixed; left: 16px; bottom: 16px; max-width: 420px; padding: 20px 22px;
+        background: rgba(13, 17, 23, 0.88); color: #e6edf3; border: 1px solid #30363d;
+        border-radius: 14px; z-index: 10;
+      }
+      #intro[hidden] { display: none; }
+      #intro h1 { margin: 0 0 6px; font-size: 22px; }
+      #intro p { margin: 0 0 14px; font-size: 15px; line-height: 1.45; color: #b6c2cf; }
+      #enter-xr {
+        font: inherit; font-size: 17px; font-weight: 600; padding: 12px 20px; border: 0;
+        border-radius: 10px; background: #2f81f7; color: #fff; cursor: pointer;
+      }
+      #enter-xr:disabled { background: #30363d; color: #8b949e; cursor: not-allowed; }
+      #xr-note { margin: 12px 0 0; font-size: 13px; }
+    </style>
+  </head>
+  <body>
+    <div id="scene-container"></div>
+    <div id="intro">
+      <h1>Agent Wall</h1>
+      <p>An AI agent plans one task on a board on your real wall. Nothing goes out until you pinch and hold to approve.</p>
+      <button id="enter-xr" type="button">Enter mixed reality</button>
+      <p id="xr-note"></p>
+    </div>
+    <script type="module" src="/src/index.ts"></script>
+  </body>
+</html>
