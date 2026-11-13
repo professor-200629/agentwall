@@ -30,6 +30,8 @@ jobs:
       - run: npm run build
         env:
           NODE_ENV: production
+          # Cloudflare Worker URL (repo variable AGENT_URL). Empty = rules-only mode.
+          VITE_AGENT_URL: ${{ vars.AGENT_URL }}
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist

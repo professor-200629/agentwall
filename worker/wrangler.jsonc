@@ -1,0 +1,12 @@
+{
+  // Agent Wall Worker: keeps the Groq API key off the client.
+  // Deploy: cd worker && npx wrangler deploy
+  // Secret:  npx wrangler secret put GROQ_API_KEY   (paste it in your terminal, never in code)
+  "name": "agentwall-agent",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-01",
+  "vars": {
+    "MODEL": "llama-3.1-8b-instant",
+    "ALLOWED_ORIGINS": "https://professor-200629.github.io,https://localhost:8081"
+  }
+}

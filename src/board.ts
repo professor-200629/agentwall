@@ -20,7 +20,8 @@ import type { OutboxItem, Plan } from './logic/plan.js';
 import { BOARD } from './logic/placement.js';
 import type { CalendarData } from './logic/scheduler.js';
 import { CanvasPanel, COLORS, drawWrapped, font, pill, PX_PER_M, roundRect } from './ui/canvas-panel.js';
-import { ALT_ROW, drawAltRow, drawGlow, drawInviteCard, drawSlotCard, drawTray } from './ui/cards.js';
+import { CHIPS, type ChipLook } from './chips.js';
+import { ALT_ROW, CHIP_FONT_PX, drawAltRow, drawChip, drawGlow, drawInviteCard, drawSlotCard, drawTray } from './ui/cards.js';
 
 export type BoardStatus = 'searching' | 'wall' | 'fallback' | 'preview';
 
@@ -36,7 +37,7 @@ export const LAYOUT = (() => {
   const W = BOARD.width;
   const H = BOARD.height;
   const margin = 0.035;
-  const header = 0.17;
+  const header = 0.245;
   const gap = 0.07;
   const trayH = 0.085;
   const top = H / 2 - header - 0.015;
@@ -50,7 +51,23 @@ export const LAYOUT = (() => {
   const rowH = px(ALT_ROW.heightPx);
   const rowW = slotW - px(ALT_ROW.padPx) * 2;
   const row2y = slot.y - cardH / 2 + px(ALT_ROW.padPx) + rowH / 2;
+  // Chip row inside the header, left to right; widths fit each label.
+  const measure = document.createElement('canvas').getContext('2d');
+  let x = left;
+  const chipH = px(46);
+  const chipY = H / 2 - px(182) - chipH / 2;
+  const chips = CHIPS.map((chip) => {
+    let w = 0.12;
+    if (measure) {
+      measure.font = `600 ${CHIP_FONT_PX}px system-ui, sans-serif`;
+      w = px(measure.measureText(chip.label).width + 40);
+    }
+    const r = { x: x + w / 2, y: chipY, w, h: chipH };
+    x += w + px(10);
+    return r;
+  });
   return {
+    chips,
     slot,
     invite: { x: left + slotW + gap + inviteW / 2, y: (top + bottom) / 2, w: inviteW, h: cardH },
     gap: { from: left + slotW, to: left + slotW + gap },
@@ -82,6 +99,9 @@ export class Board {
   private ringFill: Mesh<RingGeometry, MeshBasicMaterial>;
   private flyer: Mesh;
   private flyT = -1;
+  readonly chipPanels = LAYOUT.chips.map((r, i) => new CanvasPanel(r.w, r.h, `chip-${CHIPS[i].id}`));
+  private chipLooks: string[] = CHIPS.map(() => '');
+  private agentLine = { text: '', color: COLORS.muted };
   private hoverInvite = false;
   private hoverAlt: number | null = null;
 
@@ -93,6 +113,8 @@ export class Board {
     this.add(this.inviteCard.mesh, LAYOUT.invite.x, LAYOUT.invite.y, Z.card, 3);
     this.altRows.forEach((row, i) => this.add(row.mesh, LAYOUT.alts[i].x, LAYOUT.alts[i].y, Z.alt, 4));
     this.add(this.tray.mesh, LAYOUT.tray.x, LAYOUT.tray.y, Z.card, 3);
+    this.chipPanels.forEach((chip, i) => this.add(chip.mesh, LAYOUT.chips[i].x, LAYOUT.chips[i].y, Z.alt, 4));
+    CHIPS.forEach((_c, i) => this.setChip(i, 'normal'));
 
     // Approval ring: dark disc, faint track, amber fill that grows clockwise from 12 o'clock.
     const disc = new Mesh(
@@ -157,6 +179,22 @@ export class Board {
       this.inviteCard.draw((c, w, h) => drawInviteCard(c, w, h, plan));
     }
     this.drawAlts();
+    this.drawBack();
+  }
+
+  /** Redraw one chip, only when its look or label changed. */
+  setChip(i: number, look: ChipLook, label = CHIPS[i].label): void {
+    const key = `${look}|${label}`;
+    if (this.chipLooks[i] === key) return;
+    this.chipLooks[i] = key;
+    this.chipPanels[i].draw((c, w, h) => drawChip(c, w, h, label, look));
+  }
+
+  /** The "who planned this / what is happening" line in the header. */
+  setAgentLine(text: string, tone: 'muted' | 'ai' | 'warn' | 'ok' = 'muted'): void {
+    const color = { muted: COLORS.muted, ai: COLORS.link, warn: COLORS.amber, ok: COLORS.green }[tone];
+    if (text === this.agentLine.text && color === this.agentLine.color) return;
+    this.agentLine = { text, color };
     this.drawBack();
   }
 
@@ -239,14 +277,24 @@ export class Board {
 
       font(c, 28, 500);
       c.fillStyle = COLORS.text;
-      const task = plan ? `Task · ${plan.task}` : s.hint || 'Task · none yet';
-      drawWrapped(c, task, 44, 132, W - 88, 34, 1);
+      const task = plan ? `Task · ${plan.task}` : s.hint || 'Ask your agent: pinch a chip below, or 🎤 Speak';
+      drawWrapped(c, task, 44, 130, W - 88, 34, 1);
       font(c, 24);
       c.fillStyle = COLORS.muted;
-      c.fillText(plan?.constraintText ? `Rule · ${plan.constraintText}` : 'Rule · none', 44, 166);
+      const rule = plan?.constraintText ? `Rule · ${plan.constraintText}` : 'Rule · none';
+      c.fillText(rule, 44, 164);
+      if (this.agentLine.text) {
+        const ruleW = c.measureText(rule).width;
+        font(c, 22, 600);
+        c.fillStyle = this.agentLine.color;
+        const maxW = W - 88 - ruleW - 40;
+        let t = this.agentLine.text;
+        while (t.length > 4 && c.measureText(t).width > maxW) t = `${t.slice(0, -2)}…`;
+        c.fillText(t, W - 44 - c.measureText(t).width, 164);
+      }
 
       if (!plan) {
-        const top = 196;
+        const top = 266;
         const bottom = (BOARD.height / 2 - (LAYOUT.tray.y + LAYOUT.tray.h / 2)) * PX_PER_M - 14;
         c.setLineDash([14, 12]);
         c.lineWidth = 3;
@@ -256,7 +304,7 @@ export class Board {
         c.setLineDash([]);
         font(c, 28);
         c.fillStyle = COLORS.faint;
-        const hint = 'Your agent’s plan will appear here';
+        const hint = 'Pinch “Find time + draft invite” to start';
         c.fillText(hint, (W - c.measureText(hint).width) / 2, (top + bottom) / 2 + 10);
         return;
       }

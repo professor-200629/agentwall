@@ -6,18 +6,18 @@ and nothing goes out until you pinch and hold to approve.
 Entry for the Meta VR Start Developer Competition 2026 (Productivity track).
 Built with Meta's [Immersive Web SDK](https://iwsdk.dev) (WebXR), hands only.
 
-**Status: Day 3.** The app finds a wall and puts the board on it (or floats it
-1.2 m in front of you if there is no wall). The agent's plan shows as two linked
-cards: a **Slot** card with the best free time from a sample calendar, and an
-**Invite** card with an email draft for that time.
+**Status: Day 4, feature freeze.**
 
-- **Pinch an "Also free" row** to use that time instead. The invite rewrites
-  itself and goes back to "Needs approval".
-- **Pinch and hold the invite for 1 second** to approve it. A ring fills, the
-  invite flies into the **Demo outbox** with a chime. Nothing is really sent.
-- A short tap does nothing, and one long hold can never approve twice.
-
-AI, voice, preset chips and saving come next.
+1. The app finds a wall and puts the board on it (or floats it 1.2 m in front
+   of you if there is no wall).
+2. **Ask the agent** by pinching a chip ("Find time + draft invite", "Only after
+   4 PM", "Thursday", "Not Wed", "Any time") or pinch **🎤 Speak** and say it.
+3. The agent makes two linked cards: a **Slot** (best free time from a sample
+   calendar) and an **Invite** email for that time. Change the rule, or pinch an
+   "Also free" row, and the invite rewrites itself and needs approval again.
+4. **Pinch and hold the invite for 1 second** to approve it into the **Demo
+   outbox**. Nothing is really sent.
+5. The board is saved in your browser, so it is there when you come back.
 
 All calendar data is **sample data** (`src/data/sample-calendar.json`). Nothing
 reads a real calendar and nothing is sent.
@@ -84,6 +84,36 @@ npx iwsdk dev down
 - `src/board-system.ts`: IWSDK `RayInteractable` on the invite and the "Also
   free" rows; a hand ray adds `Hovered`, a pinch adds `Pressed`. In the desktop
   preview the mouse does the same.
+
+## The AI, and why the demo never breaks
+
+The AI has one narrow job: turn what you said ("only after 4 PM") plus the
+sample calendar into a slot choice and an email. It runs on Groq
+(`llama-3.1-8b-instant`) behind a small Cloudflare Worker (`worker/`), so the
+API key never ships in the app.
+
+- The app sends the AI only the free slots the scheduler computed; the AI must
+  pick one of them.
+- Every answer is checked (`src/logic/agent.ts`): a slot that breaks the rule
+  is replaced, an email that names the wrong day or time, has links, or is too
+  long is replaced by the template.
+- If the AI takes more than 3 seconds, errors, or is offline, the rule-based
+  scheduler answers instead. The board always says who planned it.
+- Voice: the app records up to 5 s (`getUserMedia`), the Worker sends it to
+  Whisper (`whisper-large-v3-turbo`). If the mic or the service fails, the
+  chips still work.
+
+### Set up the Worker (free)
+
+1. Create a free Groq API key at https://console.groq.com/keys
+2. In `worker/`: `npm install`, `npx wrangler login`,
+   `npx wrangler secret put GROQ_API_KEY` (paste the key when asked), then
+   `npx wrangler deploy`. It prints the Worker URL.
+3. Set the URL as a repository variable and redeploy the site:
+   `gh variable set AGENT_URL --body https://<your-worker>.workers.dev`
+   then `gh workflow run "Test and deploy to GitHub Pages"`.
+
+Without the Worker the app runs in rules mode, and the board says so.
 
 ## License
 

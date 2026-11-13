@@ -193,6 +193,37 @@ export function drawGlow(c: CanvasRenderingContext2D, w: number, h: number, inse
   c.stroke();
 }
 
+/** One preset chip. Looks: normal, hover, active (its rule is on), disabled, listening, busy. */
+export function drawChip(
+  c: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  label: string,
+  look: 'normal' | 'hover' | 'active' | 'disabled' | 'listening' | 'busy',
+): void {
+  const styles = {
+    normal: { bg: 'rgba(127, 178, 255, 0.14)', line: 'rgba(127, 178, 255, 0.55)', fg: COLORS.text },
+    hover: { bg: 'rgba(127, 178, 255, 0.4)', line: COLORS.link, fg: COLORS.text },
+    active: { bg: COLORS.link, line: COLORS.link, fg: COLORS.ink },
+    disabled: { bg: 'rgba(255, 255, 255, 0.04)', line: COLORS.line, fg: COLORS.faint },
+    listening: { bg: '#e5534b', line: '#ff8a80', fg: '#ffffff' },
+    busy: { bg: 'rgba(242, 184, 75, 0.25)', line: COLORS.amber, fg: COLORS.text },
+  }[look];
+  roundRect(c, 2, 2, w - 4, h - 4, (h - 4) / 2);
+  c.fillStyle = styles.bg;
+  c.fill();
+  c.lineWidth = 3;
+  c.strokeStyle = styles.line;
+  c.stroke();
+  font(c, CHIP_FONT_PX, 600);
+  c.fillStyle = styles.fg;
+  c.textBaseline = 'middle';
+  c.fillText(label, (w - c.measureText(label).width) / 2, h / 2 + 1);
+  c.textBaseline = 'alphabetic';
+}
+
+export const CHIP_FONT_PX = 22;
+
 export interface OutboxView {
   subject: string;
 }

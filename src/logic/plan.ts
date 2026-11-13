@@ -45,6 +45,19 @@ export interface Plan {
   approval: Approval;
   /** Bumped on every change, so views know when to redraw. */
   version: number;
+  /** Who made this plan, shown on the board so the user knows. */
+  by: 'ai' | 'rules' | 'you';
+  /** Why the rules were used instead of the AI, when that happened. */
+  note: string;
+}
+
+/** Optional overrides when the AI chose the slot or wrote the email. */
+export interface PlanOptions {
+  slot?: Slot;
+  reason?: string;
+  body?: string;
+  by?: Plan['by'];
+  note?: string;
 }
 
 /** Template email for a slot. The AI may replace the body later; the facts stay the same. */
@@ -75,18 +88,30 @@ export function makePlan(
   constraint: Constraint = {},
   constraintText = '',
   previous?: Plan,
+  opts: PlanOptions = {},
 ): Plan {
   const result = schedule(cal, constraint);
+  const slot = opts.slot ?? result.best;
+  // Alternatives: the scheduler's other good options, minus the chosen slot.
+  const others = [result.best, ...result.alternatives].filter(
+    (s): s is Slot => s !== null && s.id !== slot?.id,
+  );
+  const seen = new Set<string>();
+  const alternatives = others.filter((s) => !seen.has(s.id) && seen.add(s.id)).slice(0, 2);
+  let invite = slot ? draftInvite(cal, slot) : null;
+  if (invite && opts.body) invite = { ...invite, body: opts.body, source: 'ai' };
   return {
     task: previous?.task ?? DEMO_TASK,
     constraint,
     constraintText,
-    slot: result.best,
-    alternatives: result.alternatives,
-    reason: result.reason,
-    invite: result.best ? draftInvite(cal, result.best) : null,
+    slot,
+    alternatives,
+    reason: opts.reason ?? result.reason,
+    invite,
     approval: 'needs',
     version: (previous?.version ?? 0) + 1,
+    by: opts.by ?? 'rules',
+    note: opts.note ?? '',
   };
 }
 
@@ -107,6 +132,8 @@ export function chooseSlot(cal: CalendarData, plan: Plan, slot: Slot): Plan {
     invite: draftInvite(cal, slot),
     approval: 'needs',
     version: plan.version + 1,
+    by: 'you',
+    note: '',
   };
 }
 
