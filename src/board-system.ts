@@ -45,6 +45,11 @@ const MODEL_LABEL = 'Llama 3.1 on Groq';
 /** Each chip's rule, parsed once (not every frame). */
 const CHIP_RULES = CHIPS.map((c) => parseRequest(c.say, calendar).rule);
 
+/** An Object3D as IWSDK's pointer system sees it. */
+interface PointerTarget {
+  addEventListener(type: 'pointerdown', listener: () => void): void;
+}
+
 interface NativePlane {
   orientation?: 'horizontal' | 'vertical';
   semanticLabel?: string;
@@ -133,7 +138,12 @@ export class BoardSystem extends createSystem({
   private inviteEntity!: Entity;
   private altEntities: Entity[] = [];
   private chipEntities: Entity[] = [];
-  private wasPressed = new Map<Entity, boolean>();
+  /**
+   * Presses on chips and "Also free" rows, collected from pointerdown events.
+   * A fast click can press and release between two frames, so polling the
+   * Pressed tag could miss it; the event never does.
+   */
+  private presses: Array<{ kind: 'chip' | 'alt'; index: number }> = [];
   private holdPlanVersion = -1;
   private peakHold = 0;
   private busy = false;
@@ -156,6 +166,11 @@ export class BoardSystem extends createSystem({
     this.inviteEntity = interactive(this.board.inviteCard.mesh);
     this.altEntities = this.board.altRows.map((row) => interactive(row.mesh));
     this.chipEntities = this.board.chipPanels.map((chip) => interactive(chip.mesh));
+    // IWSDK's pointer system dispatches pointer events on the Object3D itself.
+    const onPress = (mesh: unknown, kind: 'chip' | 'alt', index: number) =>
+      (mesh as PointerTarget).addEventListener('pointerdown', () => this.presses.push({ kind, index }));
+    this.board.chipPanels.forEach((chip, i) => onPress(chip.mesh, 'chip', i));
+    this.board.altRows.forEach((row, i) => onPress(row.mesh, 'alt', i));
 
     this.voice = new VoiceInput(
       this.agentUrl,
@@ -236,14 +251,6 @@ export class BoardSystem extends createSystem({
 
   // ---------- pinches ----------
 
-  /** True once, on the frame an entity becomes pressed. */
-  private pressedNow(e: Entity): boolean {
-    const pressed = e.hasComponent(Pressed);
-    const before = this.wasPressed.get(e) ?? false;
-    this.wasPressed.set(e, pressed);
-    return pressed && !before;
-  }
-
   private hoveredIndex(list: Entity[]): number | null {
     const i = list.findIndex((e) => e.hasComponent(Hovered));
     return i < 0 ? null : i;
@@ -252,23 +259,23 @@ export class BoardSystem extends createSystem({
   private updateInteraction(delta: number): void {
     const live = this.board.object.visible;
 
-    // Chips.
-    this.chipEntities.forEach((e, i) => {
-      if (!this.pressedNow(e) || !live) return;
-      const chip = CHIPS[i];
-      if (chip.id === 'mic') void this.voice.toggle();
-      else if (!this.busy) void this.ask(chip.say);
-    });
-
-    // "Also free" rows: use that slot.
-    const plan = this.plan;
-    this.altEntities.forEach((e, i) => {
-      if (this.pressedNow(e) && live && !this.busy && plan?.alternatives[i]) {
-        this.setPlan(chooseSlot(calendar, plan, plan.alternatives[i]));
+    // Chips and "Also free" rows, in the order they were pressed.
+    for (const press of this.presses.splice(0)) {
+      if (!live) continue;
+      if (press.kind === 'chip') {
+        const chip = CHIPS[press.index];
+        if (chip.id === 'mic') void this.voice.toggle();
+        else if (!this.busy) void this.ask(chip.say);
+        continue;
+      }
+      const plan = this.plan;
+      const alt = plan?.alternatives[press.index];
+      if (plan && alt && !this.busy) {
+        this.setPlan(chooseSlot(calendar, plan, alt));
         this.say('You picked this time', 'muted');
         playTick();
       }
-    });
+    }
 
     // Invite: pinch and hold to approve.
     const current = this.plan;
