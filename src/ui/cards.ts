@@ -73,23 +73,44 @@ export function drawSlotCard(
   drawWrapped(c, plan.reason, PAD, 328, inner, 32, 2);
 
   if (plan.alternatives.length > 0) {
+    // The rows themselves are separate pinchable meshes (see ALT_ROW).
     font(c, 22, 600);
     c.fillStyle = COLORS.faint;
-    c.fillText('ALSO FREE', PAD, h - 128);
-    let y = h - 112;
-    for (const alt of plan.alternatives) {
-      roundRect(c, PAD, y, inner, 44, 12);
-      c.fillStyle = 'rgba(255, 255, 255, 0.06)';
-      c.fill();
-      c.lineWidth = 2;
-      c.strokeStyle = COLORS.line;
-      c.stroke();
-      font(c, 24, 500);
-      c.fillStyle = COLORS.text;
-      c.fillText(shortSlot(alt), PAD + 16, y + 30);
-      y += 52;
-    }
+    c.fillText('ALSO FREE · PINCH TO USE', PAD, h - ALT_ROW.labelFromBottomPx);
   }
+}
+
+/** Pixel layout of the "Also free" rows, shared with the board so meshes line up. */
+export const ALT_ROW = {
+  heightPx: 46,
+  gapPx: 8,
+  padPx: PAD,
+  labelFromBottomPx: PAD + 46 * 2 + 8 + 16,
+};
+
+export function drawAltRow(
+  c: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  slot: Slot | undefined,
+  hovered: boolean,
+): void {
+  if (!slot) return;
+  roundRect(c, 2, 2, w - 4, h - 4, 12);
+  c.fillStyle = hovered ? 'rgba(127, 178, 255, 0.28)' : 'rgba(255, 255, 255, 0.07)';
+  c.fill();
+  c.lineWidth = hovered ? 3 : 2;
+  c.strokeStyle = hovered ? COLORS.link : COLORS.line;
+  c.stroke();
+  font(c, 24, 500);
+  c.fillStyle = COLORS.text;
+  c.textBaseline = 'middle';
+  c.fillText(shortSlot(slot), 16, h / 2 + 1);
+  font(c, 20, 700);
+  c.fillStyle = COLORS.link;
+  const use = 'USE ⇄';
+  c.fillText(use, w - 16 - c.measureText(use).width, h / 2 + 1);
+  c.textBaseline = 'alphabetic';
 }
 
 export function drawInviteCard(
@@ -137,7 +158,7 @@ export function drawInviteCard(
 
   font(c, 26);
   c.fillStyle = COLORS.muted;
-  const bottom = h - PAD;
+  const bottom = approved ? h - 76 : h - PAD;
   for (const para of plan.invite.body.split('\n')) {
     if (para === '') {
       y += 12;
@@ -147,4 +168,74 @@ export function drawInviteCard(
     if (room <= 0) break;
     y = drawWrapped(c, para, PAD, y, inner, 33, room);
   }
+
+  if (approved) {
+    const bandH = 58;
+    c.save();
+    roundRect(c, 3, 3, w - 6, h - 6, 26);
+    c.clip();
+    c.fillStyle = 'rgba(90, 209, 154, 0.92)';
+    c.fillRect(0, h - bandH - 3, w, bandH + 3);
+    c.restore();
+    font(c, 24, 700);
+    c.fillStyle = COLORS.ink;
+    c.fillText('✓ In the demo outbox · not really sent', PAD, h - 22);
+  }
+}
+
+/** Amber halo drawn behind the invite while it needs approval. */
+export function drawGlow(c: CanvasRenderingContext2D, w: number, h: number, inset: number): void {
+  c.shadowColor = COLORS.amber;
+  c.shadowBlur = inset * 0.8;
+  c.lineWidth = 8;
+  c.strokeStyle = COLORS.amber;
+  roundRect(c, inset, inset, w - inset * 2, h - inset * 2, 30);
+  c.stroke();
+}
+
+export interface OutboxView {
+  subject: string;
+}
+
+export function drawTray(c: CanvasRenderingContext2D, w: number, h: number, items: OutboxView[]): void {
+  roundRect(c, 2, 2, w - 4, h - 4, 18);
+  c.fillStyle = 'rgba(255, 255, 255, 0.05)';
+  c.fill();
+  c.lineWidth = 2;
+  c.strokeStyle = COLORS.line;
+  c.stroke();
+
+  font(c, 22, 700);
+  c.fillStyle = COLORS.green;
+  c.textBaseline = 'middle';
+  const title = `DEMO OUTBOX · ${items.length}`;
+  c.fillText(title, 24, h / 2);
+  let x = 24 + c.measureText(title).width + 24;
+
+  font(c, 22);
+  const note = 'Nothing is really sent';
+  const noteW = c.measureText(note).width;
+  c.fillStyle = COLORS.faint;
+  c.fillText(note, w - 24 - noteW, h / 2);
+  const maxX = w - 24 - noteW - 24;
+
+  if (items.length === 0) {
+    c.fillStyle = COLORS.muted;
+    c.fillText('Pinch and hold the invite for 1 second to approve it.', x, h / 2);
+  } else {
+    // Newest first, as chips, until the row is full.
+    font(c, 22, 500);
+    for (const item of items) {
+      const text = `✓ ${item.subject.replace(/^App test call: /, '')}`;
+      const tw = c.measureText(text).width + 28;
+      if (x + tw > maxX) break;
+      roundRect(c, x, h / 2 - 20, tw, 40, 20);
+      c.fillStyle = 'rgba(90, 209, 154, 0.18)';
+      c.fill();
+      c.fillStyle = COLORS.text;
+      c.fillText(text, x + 14, h / 2 + 1);
+      x += tw + 10;
+    }
+  }
+  c.textBaseline = 'alphabetic';
 }

@@ -114,3 +114,37 @@ export function chooseSlot(cal: CalendarData, plan: Plan, slot: Slot): Plan {
 export function isLinked(plan: Plan): boolean {
   return plan.slot === null ? plan.invite === null : plan.invite?.slotId === plan.slot.id;
 }
+
+/** An approved invite in the demo outbox. Nothing is ever really sent. */
+export interface OutboxItem {
+  id: string;
+  to: string;
+  subject: string;
+  body: string;
+  slotId: string;
+  /** ISO time the user approved it (real clock, for display). */
+  approvedAt: string;
+}
+
+/**
+ * Approve the invite on the board. Returns null when there is nothing to
+ * approve (no invite, or it is already approved), so a double pinch can never
+ * put two copies in the outbox.
+ */
+export function approve(plan: Plan, approvedAt: string): { plan: Plan; item: OutboxItem } | null {
+  if (!plan.invite || plan.approval !== 'needs' || !isLinked(plan)) return null;
+  const item: OutboxItem = {
+    id: `${plan.invite.slotId}#v${plan.version}`,
+    to: plan.invite.to,
+    subject: plan.invite.subject,
+    body: plan.invite.body,
+    slotId: plan.invite.slotId,
+    approvedAt,
+  };
+  return { plan: { ...plan, approval: 'approved', version: plan.version + 1 }, item };
+}
+
+/** Newest first, no duplicates, at most `max` items. */
+export function addToOutbox(outbox: OutboxItem[], item: OutboxItem, max = 5): OutboxItem[] {
+  return [item, ...outbox.filter((o) => o.id !== item.id)].slice(0, max);
+}

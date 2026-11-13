@@ -1,6 +1,7 @@
 import { VisibilityState, World } from '@iwsdk/core';
 import projectOptions from 'virtual:iwsdk-project';
 import { BoardSystem } from './board-system.js';
+import { unlockAudio } from './ui/sound.js';
 
 World.create(
   document.getElementById('scene-container') as HTMLDivElement,
@@ -26,7 +27,12 @@ World.create(
       }
     });
   }
-  enter.addEventListener('click', () => world.launchXR());
+  // Desktop preview: the first click anywhere also allows sound.
+  document.addEventListener('pointerdown', unlockAudio, { once: true });
+  enter.addEventListener('click', () => {
+    unlockAudio(); // browsers allow sound only after a click
+    world.launchXR();
+  });
   world.visibilityState.subscribe((v) => {
     intro.hidden = v !== VisibilityState.NonImmersive;
   });

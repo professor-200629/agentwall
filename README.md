@@ -6,12 +6,18 @@ and nothing goes out until you pinch and hold to approve.
 Entry for the Meta VR Start Developer Competition 2026 (Productivity track).
 Built with Meta's [Immersive Web SDK](https://iwsdk.dev) (WebXR), hands only.
 
-**Status: Day 2.** The app finds a wall and puts the board on it (or floats it
+**Status: Day 3.** The app finds a wall and puts the board on it (or floats it
 1.2 m in front of you if there is no wall). The agent's plan shows as two linked
 cards: a **Slot** card with the best free time from a sample calendar, and an
-**Invite** card with an email draft for that time. Change the slot or the rule
-and the invite rewrites itself and goes back to "Needs approval". Pinch-and-hold
-approval, AI, voice and saving come next.
+**Invite** card with an email draft for that time.
+
+- **Pinch an "Also free" row** to use that time instead. The invite rewrites
+  itself and goes back to "Needs approval".
+- **Pinch and hold the invite for 1 second** to approve it. A ring fills, the
+  invite flies into the **Demo outbox** with a chime. Nothing is really sent.
+- A short tap does nothing, and one long hold can never approve twice.
+
+AI, voice, preset chips and saving come next.
 
 All calendar data is **sample data** (`src/data/sample-calendar.json`). Nothing
 reads a real calendar and nothing is sent.
@@ -67,6 +73,17 @@ npx iwsdk dev down
 - `src/logic/plan.ts`: the plan is two linked cards. The invite is always
   drafted from the chosen slot; any change rewrites it and resets approval.
 - `src/ui/cards.ts`, `src/board.ts`: draw the cards on canvas textures.
+
+## How approval works
+
+- `src/logic/hold.ts`: pinch-and-hold timer. 1 s to approve; ray flicker up to
+  0.15 s is forgiven; letting go drains the ring; after approving, the pinch
+  must be released before anything can be approved again.
+- `src/logic/plan.ts` (`approve`, `addToOutbox`): only an invite that needs
+  approval and is linked to the shown slot can be approved.
+- `src/board-system.ts`: IWSDK `RayInteractable` on the invite and the "Also
+  free" rows; a hand ray adds `Hovered`, a pinch adds `Pressed`. In the desktop
+  preview the mouse does the same.
 
 ## License
 

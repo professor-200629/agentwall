@@ -101,11 +101,11 @@ describe('chooseWall', () => {
   });
 
   it('lowers the board to fit a short wall', () => {
-    // 0.8 m tall wall from the floor up.
-    const low = frontWall({ position: { x: 0, y: 0.4, z: -2 }, polygon: rect(2, 0.4) });
+    // 1.0 m tall wall from the floor up.
+    const low = frontWall({ position: { x: 0, y: 0.5, z: -2 }, polygon: rect(2, 0.5) });
     const p = chooseWall({ x: 0, y: 1.6, z: 0 }, lookAhead, [low]);
     expect(p).not.toBeNull();
-    expect(p!.position.y).toBeCloseTo(0.8 - BOARD.height / 2);
+    expect(p!.position.y).toBeCloseTo(1.0 - BOARD.height / 2);
   });
 
   it('prefers the wall the user is looking at over a side wall', () => {

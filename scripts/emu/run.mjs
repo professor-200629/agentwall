@@ -89,10 +89,75 @@ hook('setAfter', 16, 'only after 4 PM');
 plan = hook('plan');
 check('rule "only after 4 PM": slot moves to Wed 5:30 PM', plan?.slot?.id === '2026-11-18T17:30', plan?.slot?.id);
 check('rule change rewrites the invite and keeps the link', plan?.linked === true && plan.invite.body.includes('Wednesday 18 Nov') && plan.version > v1, plan?.invite?.subject);
-hook('pickAlternative', 0);
-plan = hook('plan');
-check('picking another slot rewrites the invite', plan?.slot?.id === '2026-11-19T16:00' && plan?.linked === true && plan.invite.subject.includes('Thu 19 Nov'), plan?.invite?.subject);
 check('board shows both cards', hook('cards').every((c) => c.visible), JSON.stringify(hook('cards')));
+
+// 7. Day 3: real hand pinches.
+const v = (a) => ({ x: a[0], y: a[1], z: a[2] });
+function aim(name) {
+  const t = hook('targets')[name];
+  xr('set-transform', { device: 'hand-right', position: { x: 0.18, y: 1.0, z: -0.3 }, orientation: { pitch: 0, yaw: 0, roll: 0 } });
+  xr('look-at', { device: 'hand-right', target: v(t) });
+  return t;
+}
+const pinch = (value) => xr('set-select-value', { device: 'hand-right', value });
+
+look(0);
+xr('set-input-mode', { mode: 'hand' });
+xr('set-connected', { device: 'hand-right', connected: true });
+pinch(0);
+hook('resetDemo');
+hook('setAfter', 16, 'only after 4 PM');
+await sleep(300);
+
+aim('alt0');
+await sleep(400);
+check('hand ray hovering "Also free" row 1 highlights it', hook('interaction').altHovered === 0, JSON.stringify(hook('interaction')));
+pinch(1);
+await sleep(300);
+pinch(0);
+await sleep(300);
+plan = hook('plan');
+check('pinching "Also free" row 1 uses Thu 4:00 PM and rewrites the invite', plan?.slot?.id === '2026-11-19T16:00' && plan.linked && plan.invite.subject.includes('Thu 19 Nov'), plan?.invite?.subject);
+check('after the swap the invite needs approval', plan?.approval === 'needs', plan?.approval);
+
+aim('invite');
+await sleep(400);
+check('hand ray hovering the invite', hook('interaction').inviteHovered === true, JSON.stringify(hook('interaction')));
+xr('select', { device: 'hand-right', duration: 0.2 });
+await sleep(600);
+check('a short pinch (0.2 s) does not approve', hook('plan').approval === 'needs' && hook('outbox').length === 0, `approval=${hook('plan').approval} outbox=${hook('outbox').length}`);
+
+pinch(1);
+await sleep(1800);
+let it = hook('interaction');
+plan = hook('plan');
+let box = hook('outbox');
+check('pinch and hold ~1 s: ring filled', it.peakHold > 0.5, `peakHold=${it.peakHold.toFixed(2)}`);
+check('pinch and hold ~1 s: invite approved', plan.approval === 'approved', plan.approval);
+check('approved invite is in the demo outbox (once)', box.length === 1 && box[0].subject === plan.invite.subject, JSON.stringify(box.map((b) => b.subject)));
+await sleep(1500);
+check('still holding does not approve a second time', hook('outbox').length === 1, `outbox=${hook('outbox').length}`);
+pinch(0);
+await sleep(300);
+check('ring hidden after release', hook('interaction').hold === 0, `hold=${hook('interaction').hold}`);
+
+// Changing the plan after approval needs a fresh approval.
+aim('alt0');
+await sleep(300);
+pinch(1);
+await sleep(300);
+pinch(0);
+await sleep(300);
+plan = hook('plan');
+check('a change after approval resets the invite to "needs approval"', plan.approval === 'needs' && plan.linked, `${plan.approval} ${plan.slot?.id}`);
+aim('invite');
+await sleep(300);
+pinch(1);
+await sleep(1800);
+pinch(0);
+await sleep(300);
+box = hook('outbox');
+check('approving the new invite adds a second outbox item, newest first', box.length === 2 && box[0].slotId === hook('plan').slot.id, JSON.stringify(box.map((b) => b.slotId)));
 
 look(0, -10);
 console.log(`\n${results.filter(Boolean).length}/${results.length} passed`);

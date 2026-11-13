@@ -47,7 +47,7 @@ export interface Placement {
   planeId?: number;
 }
 
-export const BOARD: BoardSize = { width: 1.2, height: 0.75 };
+export const BOARD: BoardSize = { width: 1.2, height: 0.86 };
 
 /** Tuning, kept in one place so tests and the XR system agree. */
 export const PLACEMENT = {
