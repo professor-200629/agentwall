@@ -6,9 +6,15 @@ and nothing goes out until you pinch and hold to approve.
 Entry for the Meta VR Start Developer Competition 2026 (Productivity track).
 Built with Meta's [Immersive Web SDK](https://iwsdk.dev) (WebXR), hands only.
 
-**Status: Day 1.** The app finds a wall and puts an empty board on it. If no
-wall is found it floats the board 1.2 m in front of you at eye height. Cards,
-the agent, voice and approval come next.
+**Status: Day 2.** The app finds a wall and puts the board on it (or floats it
+1.2 m in front of you if there is no wall). The agent's plan shows as two linked
+cards: a **Slot** card with the best free time from a sample calendar, and an
+**Invite** card with an email draft for that time. Change the slot or the rule
+and the invite rewrites itself and goes back to "Needs approval". Pinch-and-hold
+approval, AI, voice and saving come next.
+
+All calendar data is **sample data** (`src/data/sample-calendar.json`). Nothing
+reads a real calendar and nothing is sent.
 
 ## Try it
 
@@ -50,6 +56,17 @@ npx iwsdk dev down
   wins; after that the board stays put.
 - `src/board-system.ts`: the IWSDK system that feeds detected planes and the
   head pose into that logic and moves the board.
+
+## How the agent plans
+
+- `src/logic/scheduler.ts`: finds 30-minute times where you and the tester are
+  both free, inside 9:00–18:00, on the half hour, with 10 minutes between
+  meetings and at least 30 minutes' notice. Rules like "only after 4 PM" narrow
+  the search. With the sample week, the default pick is Tue 1:00 PM; "only
+  after 4 PM" gives Wed 5:30 PM.
+- `src/logic/plan.ts`: the plan is two linked cards. The invite is always
+  drafted from the chosen slot; any change rewrites it and resets approval.
+- `src/ui/cards.ts`, `src/board.ts`: draw the cards on canvas textures.
 
 ## License
 

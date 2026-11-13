@@ -11,8 +11,13 @@ import {
   XRPlane,
 } from '@iwsdk/core';
 import { Board } from './board.js';
+import calendarJson from './data/sample-calendar.json';
 import { PlacementController } from './logic/placement-controller.js';
 import { fallbackPlacement, type PlaneInput, type Placement } from './logic/placement.js';
+import { chooseSlot, isLinked, makePlan, type Plan } from './logic/plan.js';
+import type { CalendarData } from './logic/scheduler.js';
+
+const calendar = calendarJson as CalendarData;
 
 /** The fields of a WebXR XRPlane we read. */
 interface NativePlane {
@@ -29,6 +34,12 @@ export interface AgentWallDebug {
   restart: () => void;
   /** Test hook: pretend the device reports no planes (like a Quest without Space Setup). */
   simulateNoPlanes: (on: boolean) => void;
+  plan: () => (Plan & { linked: boolean }) | null;
+  /** Test hook until chips/voice exist (Day 4): rule "only after H o'clock", or null to clear. */
+  setAfter: (hour: number | null, text?: string) => void;
+  /** Test hook until drag exists (Day 3): use alternative i as the slot. */
+  pickAlternative: (i: number) => void;
+  cards: () => Array<{ name: string; visible: boolean }>;
 }
 
 declare global {
@@ -48,9 +59,10 @@ export class BoardSystem extends createSystem({
   private headFwd = new Vector3();
   private lastPlanes: PlaneInput[] = [];
   private noPlanes = false;
+  private plan: Plan | null = null;
 
   init(): void {
-    this.board = new Board();
+    this.board = new Board(calendar);
     this.world.createTransformEntity(this.board.object);
 
     this.cleanupFuncs.push(
@@ -91,6 +103,20 @@ export class BoardSystem extends createSystem({
       },
       simulateNoPlanes: (on: boolean) => {
         this.noPlanes = on;
+      },
+      plan: () => (this.plan ? { ...this.plan, linked: isLinked(this.plan) } : null),
+      setAfter: (hour, text) => {
+        const constraint = hour === null ? {} : { after: hour * 60 };
+        this.setPlan(makePlan(calendar, constraint, text ?? '', this.plan ?? undefined));
+      },
+      cards: () =>
+        [this.board.slotCard, this.board.inviteCard].map((c) => ({
+          name: c.mesh.name,
+          visible: c.mesh.visible && this.board.object.visible,
+        })),
+      pickAlternative: (i) => {
+        const alt = this.plan?.alternatives[i];
+        if (this.plan && alt) this.setPlan(chooseSlot(calendar, this.plan, alt));
       },
     };
   }
@@ -147,6 +173,14 @@ export class BoardSystem extends createSystem({
     o.rotation.set(0, p.yaw, 0);
     o.visible = true;
     this.board.setStatus(p.kind);
+    // Day 2: the agent runs the demo task as soon as there is a board.
+    // Day 4 replaces this with the preset chip / voice request.
+    if (!this.plan) this.setPlan(makePlan(calendar));
+  }
+
+  private setPlan(plan: Plan): void {
+    this.plan = plan;
+    this.board.setPlan(plan);
   }
 
   /** On a desktop browser, show the board in front of the 2D camera. */

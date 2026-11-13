@@ -1,0 +1,31 @@
+{
+  "about": "SAMPLE data for the demo. Not a real calendar. Times are local (IST), no time zone maths.",
+  "timezone": "IST",
+  "now": "2026-11-16T09:00",
+  "workday": { "start": "09:00", "end": "18:00" },
+  "meeting": { "minutes": 30, "bufferMinutes": 10, "leadMinutes": 30, "stepMinutes": 30 },
+  "owner": { "name": "Balu", "email": "me@example.com" },
+  "guest": { "name": "Sam", "role": "app tester", "email": "sam.tester@example.com" },
+  "days": ["2026-11-16", "2026-11-17", "2026-11-18", "2026-11-19", "2026-11-20"],
+  "busy": {
+    "owner": [
+      { "start": "2026-11-16T09:30", "end": "2026-11-16T12:30", "title": "Sprint planning" },
+      { "start": "2026-11-16T13:00", "end": "2026-11-16T14:00", "title": "Lunch" },
+      { "start": "2026-11-16T14:00", "end": "2026-11-16T18:00", "title": "Build sprint" },
+      { "start": "2026-11-17T09:00", "end": "2026-11-17T11:00", "title": "Hackathon review" },
+      { "start": "2026-11-17T12:00", "end": "2026-11-17T12:45", "title": "Lunch" },
+      { "start": "2026-11-17T14:00", "end": "2026-11-17T15:30", "title": "Design review" },
+      { "start": "2026-11-17T17:00", "end": "2026-11-17T18:00", "title": "Gym" },
+      { "start": "2026-11-18T09:00", "end": "2026-11-18T13:00", "title": "Build" },
+      { "start": "2026-11-18T14:00", "end": "2026-11-18T16:00", "title": "Client demo" },
+      { "start": "2026-11-19T09:00", "end": "2026-11-19T12:00", "title": "Workshop" },
+      { "start": "2026-11-20T09:00", "end": "2026-11-20T17:00", "title": "Hack day" }
+    ],
+    "guest": [
+      { "start": "2026-11-17T11:00", "end": "2026-11-17T12:30", "title": "Class" },
+      { "start": "2026-11-17T15:30", "end": "2026-11-17T16:30", "title": "Commute" },
+      { "start": "2026-11-18T16:00", "end": "2026-11-18T17:00", "title": "Shift" },
+      { "start": "2026-11-19T14:00", "end": "2026-11-19T15:00", "title": "Class" }
+    ]
+  }
+}

@@ -79,6 +79,21 @@ hook('simulateNoPlanes', false);
 await sleep(1500);
 check('late wall: board moves from fallback to wall', hook('state') === 'wall', hook('state'));
 
+// 6. Day 2: two linked cards.
+let plan = hook('plan');
+check('cards: agent made a plan with a slot and an invite', !!plan?.slot && !!plan?.invite, plan?.slot?.id);
+check('cards: default slot is Tue 1:00 PM', plan?.slot?.id === '2026-11-17T13:00', plan?.invite?.subject);
+check('cards: invite is linked to the slot and needs approval', plan?.linked === true && plan?.approval === 'needs', `linked=${plan?.linked} approval=${plan?.approval}`);
+const v1 = plan.version;
+hook('setAfter', 16, 'only after 4 PM');
+plan = hook('plan');
+check('rule "only after 4 PM": slot moves to Wed 5:30 PM', plan?.slot?.id === '2026-11-18T17:30', plan?.slot?.id);
+check('rule change rewrites the invite and keeps the link', plan?.linked === true && plan.invite.body.includes('Wednesday 18 Nov') && plan.version > v1, plan?.invite?.subject);
+hook('pickAlternative', 0);
+plan = hook('plan');
+check('picking another slot rewrites the invite', plan?.slot?.id === '2026-11-19T16:00' && plan?.linked === true && plan.invite.subject.includes('Thu 19 Nov'), plan?.invite?.subject);
+check('board shows both cards', hook('cards').every((c) => c.visible), JSON.stringify(hook('cards')));
+
 look(0, -10);
 console.log(`\n${results.filter(Boolean).length}/${results.length} passed`);
 process.exit(results.every(Boolean) ? 0 : 1);

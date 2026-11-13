@@ -1,132 +1,159 @@
 /**
- * The board: one flat panel drawn on a canvas texture. Day 1 shows only the
- * title, where it was placed, and an empty area where cards will go.
+ * The board on the wall: a header (title, placement, task, rule) and two
+ * linked cards, Slot -> Invite. Each card is its own mesh so it can later be
+ * pinched, dragged and made to glow on its own.
  *
- * One mesh, one texture, redrawn only when the status changes, which keeps it
- * cheap on Quest.
+ * Board-local metres: origin at the centre, +X right, +Y up, +Z out of the wall.
  */
-import {
-  CanvasTexture,
-  Group,
-  Mesh,
-  MeshBasicMaterial,
-  PlaneGeometry,
-  SRGBColorSpace,
-} from '@iwsdk/core';
+import { Group } from '@iwsdk/core';
+import type { Plan } from './logic/plan.js';
 import { BOARD } from './logic/placement.js';
+import type { CalendarData } from './logic/scheduler.js';
+import { CanvasPanel, COLORS, drawWrapped, font, pill, PX_PER_M, roundRect } from './ui/canvas-panel.js';
+import { drawInviteCard, drawSlotCard } from './ui/cards.js';
 
 export type BoardStatus = 'searching' | 'wall' | 'fallback' | 'preview';
 
-const PX_PER_M = 1024; // canvas resolution: 1.0 m board -> 1024 px wide
-
-const STATUS_TEXT: Record<BoardStatus, { chip: string; line: string; color: string }> = {
-  searching: { chip: 'LOOKING', line: 'Looking for a wall…', color: '#9aa4b2' },
-  wall: { chip: 'ON YOUR WALL', line: 'Placed on a wall in your room', color: '#5ad19a' },
-  fallback: {
-    chip: 'FLOATING',
-    line: 'No wall in front of you — floating 1.2 m ahead',
-    color: '#f2b84b',
-  },
-  preview: { chip: 'PREVIEW', line: 'Desktop preview — enter mixed reality to use your wall', color: '#7fb2ff' },
+const STATUS: Record<BoardStatus, { chip: string; color: string; hint: string }> = {
+  searching: { chip: 'LOOKING FOR A WALL', color: '#9aa4b2', hint: 'Looking for a wall…' },
+  wall: { chip: 'ON YOUR WALL', color: COLORS.green, hint: '' },
+  fallback: { chip: 'FLOATING · NO WALL FOUND', color: COLORS.amber, hint: '' },
+  preview: { chip: 'DESKTOP PREVIEW', color: COLORS.link, hint: '' },
 };
+
+/** Card rectangles in board metres (x/y = centre). */
+export const LAYOUT = (() => {
+  const W = BOARD.width;
+  const H = BOARD.height;
+  const margin = 0.04;
+  const header = 0.17;
+  const gap = 0.07;
+  const top = H / 2 - header - 0.015;
+  const bottom = -H / 2 + margin;
+  const cardH = top - bottom;
+  const slotW = 0.44;
+  const inviteW = W - margin * 2 - slotW - gap;
+  const left = -W / 2 + margin;
+  return {
+    slot: { x: left + slotW / 2, y: (top + bottom) / 2, w: slotW, h: cardH },
+    invite: { x: left + slotW + gap + inviteW / 2, y: (top + bottom) / 2, w: inviteW, h: cardH },
+    gap: { from: left + slotW, to: left + slotW + gap },
+  };
+})();
+
+/** Cards sit a few millimetres in front of the board so they never z-fight. */
+const CARD_Z = 0.004;
 
 export class Board {
   readonly object = new Group();
   status: BoardStatus = 'searching';
-  private canvas: HTMLCanvasElement;
-  private texture: CanvasTexture;
+  private plan: Plan | null = null;
+  private backPanel = new CanvasPanel(BOARD.width, BOARD.height, 'board');
+  readonly slotCard = new CanvasPanel(LAYOUT.slot.w, LAYOUT.slot.h, 'slot-card');
+  readonly inviteCard = new CanvasPanel(LAYOUT.invite.w, LAYOUT.invite.h, 'invite-card');
 
-  constructor() {
-    this.canvas = document.createElement('canvas');
-    this.canvas.width = Math.round(BOARD.width * PX_PER_M);
-    this.canvas.height = Math.round(BOARD.height * PX_PER_M);
-    this.texture = new CanvasTexture(this.canvas);
-    this.texture.colorSpace = SRGBColorSpace;
-    this.texture.anisotropy = 4;
-
-    const mesh = new Mesh(
-      new PlaneGeometry(BOARD.width, BOARD.height),
-      new MeshBasicMaterial({ map: this.texture, transparent: true, depthWrite: false }),
-    );
-    mesh.name = 'agent-wall-board';
-    mesh.renderOrder = 1;
-    this.object.add(mesh);
+  constructor(private cal: CalendarData) {
     this.object.name = 'agent-wall';
+    this.object.add(this.backPanel.mesh);
+    this.backPanel.mesh.renderOrder = 1;
+    for (const [card, rect] of [
+      [this.slotCard, LAYOUT.slot],
+      [this.inviteCard, LAYOUT.invite],
+    ] as const) {
+      card.mesh.position.set(rect.x, rect.y, CARD_Z);
+      card.mesh.renderOrder = 2;
+      card.mesh.visible = false;
+      this.object.add(card.mesh);
+    }
     this.object.visible = false;
-    this.draw();
+    this.drawBack();
   }
 
   setStatus(status: BoardStatus): void {
     if (status === this.status) return;
     this.status = status;
-    this.draw();
+    this.drawBack();
   }
 
-  private draw(): void {
-    const c = this.canvas.getContext('2d');
-    if (!c) return;
-    const W = this.canvas.width;
-    const H = this.canvas.height;
-    const s = STATUS_TEXT[this.status];
-    c.clearRect(0, 0, W, H);
-
-    // Card body.
-    roundRect(c, 4, 4, W - 8, H - 8, 36);
-    c.fillStyle = 'rgba(16, 20, 28, 0.82)';
-    c.fill();
-    c.lineWidth = 4;
-    c.strokeStyle = 'rgba(255, 255, 255, 0.22)';
-    c.stroke();
-
-    // Title.
-    c.fillStyle = '#ffffff';
-    c.font = '600 56px system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
-    c.textBaseline = 'alphabetic';
-    c.fillText('Agent Wall', 48, 96);
-
-    // Status chip.
-    c.font = '600 24px system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
-    const chipW = c.measureText(s.chip).width + 36;
-    roundRect(c, W - 48 - chipW, 56, chipW, 46, 23);
-    c.fillStyle = s.color;
-    c.fill();
-    c.fillStyle = '#10141c';
-    c.fillText(s.chip, W - 48 - chipW + 18, 88);
-
-    // Status line.
-    c.fillStyle = 'rgba(255, 255, 255, 0.72)';
-    c.font = '400 30px system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
-    c.fillText(s.line, 48, 146);
-
-    // Empty card area (cards arrive on Day 2).
-    c.setLineDash([14, 12]);
-    c.lineWidth = 3;
-    c.strokeStyle = 'rgba(255, 255, 255, 0.25)';
-    roundRect(c, 48, 186, W - 96, H - 186 - 48, 24);
-    c.stroke();
-    c.setLineDash([]);
-    c.fillStyle = 'rgba(255, 255, 255, 0.4)';
-    c.font = '400 28px system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
-    const hint = 'Your agent’s plan will appear here';
-    c.fillText(hint, (W - c.measureText(hint).width) / 2, 186 + (H - 186 - 48) / 2 + 10);
-
-    this.texture.needsUpdate = true;
+  /** Show a plan. Redraws only what changed (by plan.version). */
+  setPlan(plan: Plan | null): void {
+    if (plan === this.plan) return;
+    const changed = !this.plan || !plan || plan.version !== this.plan.version;
+    this.plan = plan;
+    if (!changed) return;
+    this.slotCard.mesh.visible = this.inviteCard.mesh.visible = plan !== null;
+    if (plan) {
+      this.slotCard.draw((c, w, h) => drawSlotCard(c, w, h, plan, this.cal));
+      this.inviteCard.draw((c, w, h) => drawInviteCard(c, w, h, plan));
+    }
+    this.drawBack();
   }
-}
 
-function roundRect(
-  c: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  w: number,
-  h: number,
-  r: number,
-): void {
-  c.beginPath();
-  c.moveTo(x + r, y);
-  c.arcTo(x + w, y, x + w, y + h, r);
-  c.arcTo(x + w, y + h, x, y + h, r);
-  c.arcTo(x, y + h, x, y, r);
-  c.arcTo(x, y, x + w, y, r);
-  c.closePath();
+  private drawBack(): void {
+    const s = STATUS[this.status];
+    const plan = this.plan;
+    this.backPanel.draw((c, W, H) => {
+      roundRect(c, 4, 4, W - 8, H - 8, 36);
+      c.fillStyle = COLORS.board;
+      c.fill();
+      c.lineWidth = 4;
+      c.strokeStyle = COLORS.line;
+      c.stroke();
+
+      font(c, 54, 700);
+      c.fillStyle = COLORS.text;
+      c.fillText('Agent Wall', 44, 86);
+      pill(c, s.chip, W - 44, 46, s.color, COLORS.ink, 20, true);
+
+      font(c, 28, 500);
+      c.fillStyle = COLORS.text;
+      const task = plan ? `Task · ${plan.task}` : s.hint || 'Task · none yet';
+      drawWrapped(c, task, 44, 132, W - 88, 34, 1);
+      font(c, 24);
+      c.fillStyle = COLORS.muted;
+      c.fillText(plan?.constraintText ? `Rule · ${plan.constraintText}` : 'Rule · none', 44, 166);
+
+      if (!plan) {
+        // Empty card area.
+        const top = 196;
+        c.setLineDash([14, 12]);
+        c.lineWidth = 3;
+        c.strokeStyle = COLORS.line;
+        roundRect(c, 44, top, W - 88, H - top - 44, 24);
+        c.stroke();
+        c.setLineDash([]);
+        font(c, 28);
+        c.fillStyle = COLORS.faint;
+        const hint = 'Your agent’s plan will appear here';
+        c.fillText(hint, (W - c.measureText(hint).width) / 2, top + (H - top - 44) / 2 + 10);
+        return;
+      }
+
+      // Link arrow between the cards: Slot -> Invite ("uses").
+      const toPx = (xm: number) => (xm + BOARD.width / 2) * PX_PER_M;
+      const toPy = (ym: number) => (BOARD.height / 2 - ym) * PX_PER_M;
+      const x0 = toPx(LAYOUT.gap.from) + 6;
+      const x1 = toPx(LAYOUT.gap.to) - 6;
+      const y = toPy(LAYOUT.slot.y);
+      c.strokeStyle = COLORS.link;
+      c.fillStyle = COLORS.link;
+      c.lineWidth = 5;
+      c.beginPath();
+      c.moveTo(x0, y);
+      c.lineTo(x1 - 14, y);
+      c.stroke();
+      c.beginPath();
+      c.moveTo(x1, y);
+      c.lineTo(x1 - 18, y - 12);
+      c.lineTo(x1 - 18, y + 12);
+      c.closePath();
+      c.fill();
+      c.beginPath();
+      c.arc(x0, y, 7, 0, Math.PI * 2);
+      c.fill();
+      font(c, 20, 700);
+      const word = 'uses';
+      c.fillText(word, (x0 + x1) / 2 - c.measureText(word).width / 2, y - 18);
+    });
+  }
 }
