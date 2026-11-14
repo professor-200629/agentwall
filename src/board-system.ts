@@ -38,6 +38,7 @@ import { chooseDesk, type DeskPlacement } from './logic/desk.js';
 import { HOLD, HoldToApprove } from './logic/hold.js';
 import { PlacementController } from './logic/placement-controller.js';
 import { fallbackPlacement, type PlaneInput, type Placement } from './logic/placement.js';
+import { parsePrint, SAME_WALL, serializePrint, wallPrint, type WallPrint } from './logic/same-wall.js';
 import {
   addToOutbox,
   approve,
@@ -103,6 +104,9 @@ export interface AgentWallDebug {
   restart: () => void;
   /** Test hook: pretend the device reports no planes (like a Quest without Space Setup). */
   simulateNoPlanes: (on: boolean) => void;
+  /** The remembered wall fingerprint (same spot next session), or null. */
+  wallMemory: () => WallPrint | null;
+  forgetWall: () => void;
   plan: () => (Plan & { linked: boolean }) | null;
   cards: () => Array<{ name: string; visible: boolean }>;
   /** World positions of the pinchable targets, for aiming in the emulator. */
@@ -152,18 +156,18 @@ declare global {
   }
 }
 
-function readStorage(): string | null {
+function readStorage(key: string = STORAGE_KEY): string | null {
   try {
-    return localStorage.getItem(STORAGE_KEY);
+    return localStorage.getItem(key);
   } catch {
     return null;
   }
 }
 
-function writeStorage(json: string | null): void {
+function writeStorage(json: string | null, key: string = STORAGE_KEY): void {
   try {
-    if (json === null) localStorage.removeItem(STORAGE_KEY);
-    else localStorage.setItem(STORAGE_KEY, json);
+    if (json === null) localStorage.removeItem(key);
+    else localStorage.setItem(key, json);
   } catch {
     // Private mode or storage blocked: the board still works, it just won't be remembered.
   }
@@ -183,6 +187,8 @@ export class BoardSystem extends createSystem({
 }) {
   private board!: Board;
   private controller = new PlacementController();
+  /** The wall the board was on last time (same spot next session); kept apart from the plan. */
+  private wallMemory: WallPrint | null = parsePrint(readStorage(SAME_WALL.storageKey));
   private pendingStart = false;
   private headPos = new Vector3();
   private headQuat = new Quaternion();
@@ -620,9 +626,9 @@ export class BoardSystem extends createSystem({
   private updatePlacement(time: number): void {
     if (this.pendingStart) {
       this.pendingStart = false;
-      this.controller.start(time);
+      this.controller.start(time, this.wallMemory);
     }
-    if (this.controller.state === 'idle' || this.controller.state === 'wall') return;
+    if (this.controller.settled) return;
     const head = this.player.head;
     head.getWorldPosition(this.headPos);
     head.getWorldQuaternion(this.headQuat);
@@ -658,7 +664,9 @@ export class BoardSystem extends createSystem({
     o.rotation.set(0, p.yaw, 0);
     o.scale.setScalar(p.scale);
     o.visible = true;
-    this.board.setStatus(p.kind);
+    this.board.setStatus(p.remembered ? 'same-wall' : p.kind);
+    if (p.kind === 'wall') this.rememberWall(p);
+    if (p.remembered) this.say('Back on your wall · same spot as last time', 'ok');
     if (p.kind === 'fallback' && this.world.visibilityState.value !== VisibilityState.NonImmersive) {
       this.say('No wall found · run Space Setup in Quest settings to pin the board to a wall', 'warn');
     } else if (p.kind === 'wall' && /No wall found/.test(this.agentLineText)) {
@@ -666,6 +674,15 @@ export class BoardSystem extends createSystem({
     }
     // The desk decides: the invite card goes to the real table in front, or the lap.
     this.placeDesk(chooseDesk(this.headPos, this.headFwd, this.lastPlanes));
+  }
+
+  /** Save the wall's fingerprint so the next session can find the same spot. */
+  private rememberWall(p: Placement): void {
+    const plane = this.lastPlanes.find((q) => q.id === p.planeId);
+    const print = plane ? wallPrint(this.headPos, plane, p.position) : null;
+    if (!print) return;
+    this.wallMemory = print;
+    writeStorage(serializePrint(print), SAME_WALL.storageKey);
   }
 
   private placeDesk(d: DeskPlacement): void {
@@ -711,6 +728,11 @@ export class BoardSystem extends createSystem({
       },
       simulateNoPlanes: (on) => {
         this.noPlanes = on;
+      },
+      wallMemory: () => this.wallMemory,
+      forgetWall: () => {
+        this.wallMemory = null;
+        writeStorage(null, SAME_WALL.storageKey);
       },
       plan: () => (this.plan ? { ...this.plan, linked: isLinked(this.plan) } : null),
       cards: () =>
@@ -819,6 +841,8 @@ export class BoardSystem extends createSystem({
         this.board.setOutbox([]);
         this.say('', 'muted');
         writeStorage(null);
+        this.wallMemory = null;
+        writeStorage(null, SAME_WALL.storageKey);
       },
       saved: () => readStorage(),
     };

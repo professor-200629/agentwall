@@ -28,7 +28,10 @@ checklist: [docs/TESTING-ON-QUEST.md](docs/TESTING-ON-QUEST.md).**
    approved time ("Dentist"). The mural shows it in red, the invite shows the
    conflict, and a **Re-plan?** card appears. Re-planning moves the invite to a
    new time, and it needs your hold again. The agent never re-sends on its own.
-6. The board is saved in your browser, so it is there when you come back.
+6. **Same wall next time:** the board remembers which wall it was on and where.
+   Next time you enter, it comes back to the same spot ("BACK ON YOUR WALL"),
+   even if you sit a little differently or look elsewhere. The plan and the
+   demo outbox are saved in your browser too.
 
 Screenshots from Meta's Quest 3 emulator (IWER), not a real headset:
 
@@ -39,6 +42,8 @@ Screenshots from Meta's Quest 3 emulator (IWER), not a real headset:
 | ![Needs approval](docs/screenshots/desk-1-needs-approval.png) | ![Unsend window](docs/screenshots/desk-2-unsend-window.png) |
 | **Receipt: RULES / YOU / DEMO** | **Agent keeps watch: conflict + Re-plan?** |
 | ![Receipt](docs/screenshots/desk-3-receipt.png) | ![Re-plan](docs/screenshots/desk-4-replan.png) |
+| **Next session, another seat: same spot** | |
+| ![Back on your wall](docs/screenshots/wall-back-same-spot.png) | |
 
 All calendar data is **sample data** (`src/data/sample-calendar.json`). Nothing
 reads a real calendar and nothing is sent.
@@ -81,6 +86,15 @@ npx iwsdk dev down
 - `src/logic/placement-controller.ts`: waits up to 2.5 s for a wall, then falls
   back to 1.2 m in front of you. A wall that shows up in the first 15 s still
   wins; after that the board stays put.
+- `src/logic/same-wall.ts`: remembers the wall as a fingerprint (label, width,
+  height, bottom edge) plus the board's distance from the wall's left end and
+  its height. All measured in the room, not in session coordinates, so a new
+  session from another spot still finds it. A wall that matches within 8 cm
+  and is in front (75°) gets the board back on its old spot; two same-size
+  walls are told apart by where you look. If the board first lands on another
+  wall, it moves only when the remembered wall arrives late as a new plane, so
+  turning your head never moves it. No WebXR anchors. Assumption, not yet
+  checked on a Quest: Space Setup reports the same wall sizes every session.
 - `src/board-system.ts`: the IWSDK system that feeds detected planes and the
   head pose into that logic and moves the board.
 

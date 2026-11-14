@@ -308,6 +308,48 @@ hook('restart');
 await sleep(2000);
 check('no table within reach: the invite comes above the lap', hook('desk')?.kind === 'lap', JSON.stringify(hook('desk')));
 
+// ---------- 14. Same wall next time ----------
+// The emulator room never changes, so every check here has a control: a new
+// seat and gaze that would put the board somewhere else without the memory.
+const dist3 = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+const seat2 = () => xr('set-transform', { device: 'headset', position: { x: 0.35, y: 1.15, z: 0.25 }, orientation: { pitch: 0, yaw: -18, roll: 0 } });
+look(0);
+hook('forgetWall');
+hook('restart');
+await sleep(2000);
+const spot = hook('board').position;
+const mem = hook('wallMemory');
+check('the board remembers its wall: label, size and spot', !!mem && mem.label === 'wall' && mem.width > 1 && Math.abs(mem.y - spot[1]) < 0.01, JSON.stringify(mem));
+seat2();
+hook('restart');
+await sleep(2000);
+let pl = hook('placement');
+let here = hook('board').position;
+check('new seat, new gaze: the board comes back to the same spot on the same wall', pl?.remembered === true && dist3(here, spot) < 0.02 && /Back on your wall/.test(hook('interaction').agentLine), `moved ${dist3(here, spot).toFixed(3)} m | ${hook('interaction').agentLine}`);
+cli(['browser', 'reload']);
+await sleep(3500);
+await enterXr();
+seat2();
+hook('restart');
+await sleep(2000);
+pl = hook('placement');
+here = hook('board').position;
+check('after a page reload (saved in the browser) it still comes back to the same spot', pl?.remembered === true && dist3(here, spot) < 0.02, `moved ${dist3(here, spot).toFixed(3)} m remembered=${pl?.remembered}`);
+hook('forgetWall');
+hook('restart');
+await sleep(2000);
+here = hook('board').position;
+check('control: same seat and gaze WITHOUT the memory put the board elsewhere', hook('placement')?.remembered !== true && dist3(here, spot) > 0.1, `${dist3(here, spot).toFixed(2)} m away`);
+const memBefore = JSON.stringify(hook('wallMemory'));
+look(90);
+hook('restart');
+await sleep(2000);
+pl = hook('placement');
+check('facing another wall: the board goes there as usual, and that wall is remembered next', pl?.kind === 'wall' && pl.remembered !== true && JSON.stringify(hook('wallMemory')) !== memBefore, `kind=${pl?.kind} remembered=${pl?.remembered}`);
+look(0);
+hook('restart');
+await sleep(1500);
+
 look(0, -10);
 console.log(`\n${results.filter(Boolean).length}/${results.length} passed`);
 process.exit(results.every(Boolean) ? 0 : 1);

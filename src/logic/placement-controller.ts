@@ -11,6 +11,11 @@
  * Quest can report planes a moment after the session starts, so a late wall
  * still wins for a short while. After that the board stays where it is, so it
  * never jumps around while the user works.
+ *
+ * Same wall next time: with a remembered wall (same-wall.ts) the board goes
+ * back to its old spot when that wall is in front. If the board first lands on
+ * another wall, it moves only when the remembered wall is a plane that arrives
+ * LATE (not one that was already known), so turning your head never moves it.
  */
 import {
   chooseWall,
@@ -19,6 +24,7 @@ import {
   type Placement,
   type V3,
 } from './placement.js';
+import { placeOnRememberedWall, type WallPrint } from './same-wall.js';
 
 export type PlacementState = 'idle' | 'searching' | 'fallback' | 'wall';
 
@@ -33,12 +39,18 @@ export class PlacementController {
   private startedAt = 0;
   /** Set once the user starts using the board: it must not jump to a late wall. */
   private locked = false;
+  /** The wall remembered from last time, if any. */
+  private memory: WallPrint | null = null;
+  /** Plane ids known when the board landed on a different wall than the remembered one. */
+  private knownAtLanding: Set<number> | null = null;
 
-  start(now: number): void {
+  start(now: number, memory: WallPrint | null = null): void {
     this.state = 'searching';
     this.current = null;
     this.startedAt = now;
     this.locked = false;
+    this.memory = memory;
+    this.knownAtLanding = null;
   }
 
   /** The user is interacting with the board: keep it where it is (code review 14 Nov). */
@@ -51,20 +63,44 @@ export class PlacementController {
     this.current = null;
   }
 
+  /** True when tick() can no longer move the board (the caller may stop calling it). */
+  get settled(): boolean {
+    if (this.state === 'idle') return true;
+    if (this.locked) return true;
+    return this.state === 'wall' && this.knownAtLanding === null;
+  }
+
   /**
    * Returns a new placement when the board should move this frame, else null.
    * `now` is in seconds.
    */
   tick(now: number, head: V3, forward: V3, planes: ReadonlyArray<PlaneInput>): Placement | null {
-    if (this.state === 'idle' || this.state === 'wall' || this.locked) return null;
+    if (this.state === 'idle' || this.locked) return null;
     const elapsed = now - this.startedAt;
+    if (elapsed > TIMING.lateWallSeconds) this.knownAtLanding = null;
+    if (this.settled) return null;
 
     if (elapsed <= TIMING.lateWallSeconds && planes.length > 0) {
-      const wall = chooseWall(head, forward, planes);
-      if (wall) {
-        this.state = 'wall';
-        this.current = wall;
-        return wall;
+      if (this.memory) {
+        // Already on another wall: only planes that arrived since then may match.
+        const known = this.knownAtLanding;
+        const fresh = known ? planes.filter((p) => !known.has(p.id)) : planes;
+        const back = fresh.length > 0 ? placeOnRememberedWall(head, forward, fresh, this.memory) : null;
+        if (back) {
+          this.state = 'wall';
+          this.current = back;
+          this.knownAtLanding = null;
+          return back;
+        }
+      }
+      if (this.state !== 'wall') {
+        const wall = chooseWall(head, forward, planes);
+        if (wall) {
+          this.state = 'wall';
+          this.current = wall;
+          this.knownAtLanding = this.memory ? new Set(planes.map((p) => p.id)) : null;
+          return wall;
+        }
       }
     }
 

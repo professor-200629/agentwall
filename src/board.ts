@@ -27,11 +27,12 @@ import { CanvasPanel, COLORS, drawWrapped, font, pill, PX_PER_M, roundRect } fro
 import { CHIP_FONT_PX, drawAltRow, drawChip, drawGlow, drawInviteCard, drawTray, type InviteExtras } from './ui/cards.js';
 import { drawMural, muralGrid, type MuralView } from './ui/mural.js';
 
-export type BoardStatus = 'searching' | 'wall' | 'fallback' | 'preview';
+export type BoardStatus = 'searching' | 'wall' | 'same-wall' | 'fallback' | 'preview';
 
 const STATUS: Record<BoardStatus, { chip: string; color: string; hint: string }> = {
   searching: { chip: 'LOOKING FOR A WALL', color: '#9aa4b2', hint: 'Looking for a wall…' },
   wall: { chip: 'ON YOUR WALL', color: COLORS.green, hint: '' },
+  'same-wall': { chip: 'BACK ON YOUR WALL', color: COLORS.green, hint: '' },
   fallback: { chip: 'FLOATING · NO WALL FOUND', color: COLORS.amber, hint: '' },
   preview: { chip: 'DESKTOP PREVIEW', color: COLORS.link, hint: '' },
 };
@@ -201,7 +202,8 @@ export class Board {
 
   setStatus(status: BoardStatus): void {
     if (status === this.status) return;
-    const landed = status === 'wall' && this.status !== 'wall';
+    const onWall = (st: BoardStatus) => st === 'wall' || st === 'same-wall';
+    const landed = onWall(status) && !onWall(this.status);
     this.status = status;
     this.drawBack();
     if (landed) this.landCue();

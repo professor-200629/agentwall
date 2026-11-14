@@ -47,6 +47,8 @@ export interface Placement {
   /** Uniform scale for the board (1 = BOARD size). Far walls get a bigger board. */
   scale: number;
   planeId?: number;
+  /** True when this is the remembered spot on the wall from last time (same-wall.ts). */
+  remembered?: boolean;
 }
 
 /**
@@ -81,14 +83,14 @@ export const PLACEMENT = {
 } as const;
 
 /** Labels that mean "this vertical plane is not a free wall". */
-const NOT_A_WALL = new Set(['door', 'window', 'screen', 'wall_art', 'wall art']);
+export const NOT_A_WALL = new Set(['door', 'window', 'screen', 'wall_art', 'wall art']);
 
 const UP: V3 = { x: 0, y: 1, z: 0 };
 
-const sub = (a: V3, b: V3): V3 => ({ x: a.x - b.x, y: a.y - b.y, z: a.z - b.z });
+export const sub = (a: V3, b: V3): V3 => ({ x: a.x - b.x, y: a.y - b.y, z: a.z - b.z });
 const add = (a: V3, b: V3): V3 => ({ x: a.x + b.x, y: a.y + b.y, z: a.z + b.z });
 const scale = (a: V3, s: number): V3 => ({ x: a.x * s, y: a.y * s, z: a.z * s });
-const dot = (a: V3, b: V3): number => a.x * b.x + a.y * b.y + a.z * b.z;
+export const dot = (a: V3, b: V3): number => a.x * b.x + a.y * b.y + a.z * b.z;
 const len = (a: V3): number => Math.sqrt(dot(a, a));
 const clamp = (v: number, lo: number, hi: number): number =>
   lo > hi ? (lo + hi) / 2 : Math.min(hi, Math.max(lo, v));
@@ -126,16 +128,24 @@ export interface WallCandidate extends Placement {
   score: number;
 }
 
-/**
- * Try to put the board on one plane. Returns null when the plane is not a
- * usable wall from where the user is.
- */
-export function placeOnWall(
-  head: V3,
-  forward: V3,
-  plane: PlaneInput,
-  board: BoardSize = BOARD,
-): WallCandidate | null {
+/** A usable wall as seen from the head: inward normal, tangent and extent. */
+export interface WallFrame {
+  /** Horizontal unit normal, pointing into the room (at the user). */
+  n: V3;
+  /** Horizontal unit tangent: n turned +90° about +Y, which is the user's LEFT when facing the wall. */
+  t: V3;
+  /** Head-to-wall distance along n, metres. */
+  dist: number;
+  /** Wall extent along t, measured from plane.position. */
+  uMin: number;
+  uMax: number;
+  /** World heights of the wall's bottom and top edges. */
+  vMin: number;
+  vMax: number;
+}
+
+/** The wall frame of a plane, or null when the plane is not a free wall. */
+export function wallFrame(head: V3, plane: PlaneInput): WallFrame | null {
   if (!plane.vertical) return null;
   if (plane.label && NOT_A_WALL.has(plane.label.toLowerCase())) return null;
   if (plane.polygon.length < 3) return null;
@@ -147,12 +157,7 @@ export function placeOnWall(
   if (nl < 1e-3) return null;
   n = scale(n, 1 / nl);
   if (dot(n, sub(head, plane.position)) < 0) n = scale(n, -1);
-
   const dist = dot(sub(head, plane.position), n);
-  // Size the board for this distance before checking that it fits on the wall.
-  const boardScale = boardScaleFor(dist);
-  board = { width: board.width * boardScale, height: board.height * boardScale };
-  if (dist < PLACEMENT.minWallDistance || dist > PLACEMENT.maxWallDistance) return null;
 
   // Wall extent along its horizontal tangent (u) and world height (v).
   const t: V3 = { x: -n.z, y: 0, z: n.x };
@@ -168,31 +173,39 @@ export function placeOnWall(
     vMin = Math.min(vMin, w.y);
     vMax = Math.max(vMax, w.y);
   }
+  return { n, t, dist, uMin, uMax, vMin, vMax };
+}
+
+/**
+ * Put the board at the wanted spot (u along the wall, height y) on one wall,
+ * kept inside the wall's edges. Returns null when the wall is too near, too
+ * far, too small, or the spot is more than maxAngle from where the user looks.
+ */
+export function spotOnWall(
+  head: V3,
+  forward: V3,
+  plane: PlaneInput,
+  frame: WallFrame,
+  wantU: number,
+  wantY: number,
+  maxAngle: number,
+  board: BoardSize = BOARD,
+): WallCandidate | null {
+  const { n, t, dist, uMin, uMax, vMin, vMax } = frame;
+  // Size the board for this distance before checking that it fits on the wall.
+  const boardScale = boardScaleFor(dist);
+  board = { width: board.width * boardScale, height: board.height * boardScale };
+  if (dist < PLACEMENT.minWallDistance || dist > PLACEMENT.maxWallDistance) return null;
   if (uMax - uMin < board.width * PLACEMENT.minFit) return null;
   if (vMax - vMin < board.height * PLACEMENT.minFit) return null;
 
-  // Where the user is looking on this wall (or the foot of the perpendicular).
-  const f = flatForward(forward);
-  const towardWall = -dot(f, n);
-  let u: number;
-  if (towardWall > 0.2) {
-    const hit = add(head, scale(f, dist / towardWall));
-    u = dot(sub(hit, plane.position), t);
-  } else {
-    u = dot(sub(head, plane.position), t);
-  }
-  u = clamp(u, uMin + board.width / 2, uMax - board.width / 2);
-  const y = clamp(
-    head.y - PLACEMENT.belowEye,
-    vMin + board.height / 2,
-    vMax - board.height / 2,
-  );
-
+  const u = clamp(wantU, uMin + board.width / 2, uMax - board.width / 2);
+  const y = clamp(wantY, vMin + board.height / 2, vMax - board.height / 2);
   const onWall = add(plane.position, scale(t, u));
   const position = add({ x: onWall.x, y, z: onWall.z }, scale(n, PLACEMENT.wallGap));
   const toBoard = sub(position, head);
-  const angle = angleDeg(f, { x: toBoard.x, y: 0, z: toBoard.z });
-  if (angle > PLACEMENT.maxAngleDeg) return null;
+  const angle = angleDeg(flatForward(forward), { x: toBoard.x, y: 0, z: toBoard.z });
+  if (angle > maxAngle) return null;
 
   const distance = len(toBoard);
   return {
@@ -206,6 +219,32 @@ export function placeOnWall(
     // Prefer the wall straight ahead, then the nearer one.
     score: angle + 4 * distance,
   };
+}
+
+/**
+ * Try to put the board on one plane where the user is looking. Returns null
+ * when the plane is not a usable wall from where the user is.
+ */
+export function placeOnWall(
+  head: V3,
+  forward: V3,
+  plane: PlaneInput,
+  board: BoardSize = BOARD,
+): WallCandidate | null {
+  const frame = wallFrame(head, plane);
+  if (!frame) return null;
+  const { n, t, dist } = frame;
+  // Where the user is looking on this wall (or the foot of the perpendicular).
+  const f = flatForward(forward);
+  const towardWall = -dot(f, n);
+  let u: number;
+  if (towardWall > 0.2) {
+    const hit = add(head, scale(f, dist / towardWall));
+    u = dot(sub(hit, plane.position), t);
+  } else {
+    u = dot(sub(head, plane.position), t);
+  }
+  return spotOnWall(head, forward, plane, frame, u, head.y - PLACEMENT.belowEye, PLACEMENT.maxAngleDeg, board);
 }
 
 /** Best wall in front of the user, or null when there is none. */

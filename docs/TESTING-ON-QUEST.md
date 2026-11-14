@@ -49,8 +49,11 @@ The app saves its board only in your browser.
 8. Pinch **🎤 Speak** and say: *"Thursday please"*. Wait ~5 s.
    - Did the browser ask for the microphone? Did it break the
      mixed reality view? What did the board show after "Heard: …"?
-9. Leave mixed reality (Meta button › exit, or close), then press
-   **Enter mixed reality** again. The same cards should come back on the wall.
+9. Leave mixed reality (Meta button › exit, or close). Shift in your seat or
+   turn your head a little, then press **Enter mixed reality** again. The board
+   should come back to the **same spot on the same wall**, and the chip in its
+   top-right corner should say "BACK ON YOUR WALL". Did it land in the same
+   place?
 10. Close the browser tab, open the link again: it should say
     "Welcome back · board saved …".
 
