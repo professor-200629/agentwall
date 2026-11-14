@@ -1,11 +1,14 @@
 /**
- * The board on the wall: a header, two linked cards (Slot -> Invite), and the
- * demo outbox tray along the bottom.
+ * Agent Wall's visuals. "The wall thinks, the desk decides."
  *
- * Interactive parts (the invite card and the "Also free" rows) are separate
- * meshes so BoardSystem can make each one its own ray-interactable entity.
- * The board itself only draws; it never reads input.
+ * - `object` (on the wall): header with chips, the WEEK MURAL (the agent
+ *   strikes out every time it can't use, then one gold slot stays lit),
+ *   pinchable runner-up pills, a Re-plan card, and the demo outbox tray.
+ * - `desk` (on the user's real table, or above their lap): the invite card,
+ *   its amber glow and the pinch-and-hold ring.
  *
+ * Interactive parts are separate meshes so BoardSystem can make each one its
+ * own ray-interactable entity. The board only draws; it never reads input.
  * Board-local metres: origin at the centre, +X right, +Y up, +Z out of the wall.
  */
 import {
@@ -16,12 +19,13 @@ import {
   MeshBasicMaterial,
   RingGeometry,
 } from '@iwsdk/core';
+import { CHIPS, type ChipLook } from './chips.js';
 import type { OutboxItem, Plan } from './logic/plan.js';
 import { BOARD } from './logic/placement.js';
-import type { CalendarData } from './logic/scheduler.js';
+import type { WeekModel } from './logic/week.js';
 import { CanvasPanel, COLORS, drawWrapped, font, pill, PX_PER_M, roundRect } from './ui/canvas-panel.js';
-import { CHIPS, type ChipLook } from './chips.js';
-import { ALT_ROW, CHIP_FONT_PX, drawAltRow, drawChip, drawGlow, drawInviteCard, drawSlotCard, drawTray } from './ui/cards.js';
+import { CHIP_FONT_PX, drawAltRow, drawChip, drawGlow, drawInviteCard, drawTray, type InviteExtras } from './ui/cards.js';
+import { drawMural, muralGrid, type MuralView } from './ui/mural.js';
 
 export type BoardStatus = 'searching' | 'wall' | 'fallback' | 'preview';
 
@@ -32,25 +36,18 @@ const STATUS: Record<BoardStatus, { chip: string; color: string; hint: string }>
   preview: { chip: 'DESKTOP PREVIEW', color: COLORS.link, hint: '' },
 };
 
+const px = (n: number) => n / PX_PER_M;
+
 /** Rectangles in board metres (x/y = centre). */
 export const LAYOUT = (() => {
   const W = BOARD.width;
   const H = BOARD.height;
   const margin = 0.035;
   const header = 0.245;
-  const gap = 0.07;
   const trayH = 0.085;
-  const top = H / 2 - header - 0.015;
-  const bottom = -H / 2 + margin + trayH + 0.015;
-  const cardH = top - bottom;
-  const slotW = 0.44;
-  const inviteW = W - margin * 2 - slotW - gap;
+  const top = H / 2 - header - 0.01;
+  const bottom = -H / 2 + margin + trayH + 0.012;
   const left = -W / 2 + margin;
-  const slot = { x: left + slotW / 2, y: (top + bottom) / 2, w: slotW, h: cardH };
-  const px = (n: number) => n / PX_PER_M;
-  const rowH = px(ALT_ROW.heightPx);
-  const rowW = slotW - px(ALT_ROW.padPx) * 2;
-  const row2y = slot.y - cardH / 2 + px(ALT_ROW.padPx) + rowH / 2;
   // Chip row inside the header, left to right; widths fit each label.
   const measure = document.createElement('canvas').getContext('2d');
   let x = left;
@@ -68,57 +65,90 @@ export const LAYOUT = (() => {
     x += w + px(10);
     return r;
   });
+  const mural = { x: 0, y: (top + bottom) / 2, w: W - margin * 2, h: top - bottom };
+  const replan = { x: 0, y: mural.y - mural.h / 2 + 0.135, w: 0.8, h: 0.13 };
   return {
     chips,
-    slot,
-    invite: { x: left + slotW + gap + inviteW / 2, y: (top + bottom) / 2, w: inviteW, h: cardH },
-    gap: { from: left + slotW, to: left + slotW + gap },
-    alts: [
-      { x: slot.x, y: row2y + rowH + px(ALT_ROW.gapPx), w: rowW, h: rowH },
-      { x: slot.x, y: row2y, w: rowW, h: rowH },
-    ],
+    mural,
+    pill: { w: 0.2, h: 0.05 },
+    replan,
+    replanYes: { x: replan.x + 0.17, y: replan.y, w: 0.14, h: 0.07 },
+    replanNo: { x: replan.x + 0.32, y: replan.y, w: 0.13, h: 0.07 },
     tray: { x: 0, y: -H / 2 + margin + trayH / 2, w: W - margin * 2, h: trayH },
   };
 })();
 
+/** The desk invite card is drawn at wall-card resolution and shrunk on the desk. */
+export const INVITE = { w: 0.62, h: 0.52, deskScale: 0.55 };
+
 /** Layers in front of the board, in metres, so nothing z-fights. */
-const Z = { glow: 0.002, card: 0.004, alt: 0.006, ring: 0.012 };
+const Z = { mural: 0.004, pill: 0.008, replan: 0.012, button: 0.016, cue: 0.02 };
 const GLOW_PAD = 0.03;
 const RING_SEGMENTS = 64;
-const FLY_SECONDS = 0.6;
+/** Seconds the agent's sweep across the week takes. */
+export const SWEEP_SECONDS = 1.8;
+
+export interface BoardView {
+  plan: Plan | null;
+  week: WeekModel | null;
+  invite: InviteExtras;
+  replanText: string | null;
+  fresh: Set<string>;
+}
 
 export class Board {
   readonly object = new Group();
+  readonly desk = new Group();
   status: BoardStatus = 'searching';
   private plan: Plan | null = null;
+  private week: WeekModel | null = null;
+  private fresh = new Set<string>();
   private backPanel = new CanvasPanel(BOARD.width, BOARD.height, 'board');
-  readonly slotCard = new CanvasPanel(LAYOUT.slot.w, LAYOUT.slot.h, 'slot-card');
-  readonly inviteCard = new CanvasPanel(LAYOUT.invite.w, LAYOUT.invite.h, 'invite-card');
-  readonly altRows = LAYOUT.alts.map((r, i) => new CanvasPanel(r.w, r.h, `alt-slot-${i}`));
+  readonly mural = new CanvasPanel(LAYOUT.mural.w, LAYOUT.mural.h, 'week-mural');
+  readonly altRows = [0, 1].map((i) => new CanvasPanel(LAYOUT.pill.w, LAYOUT.pill.h, `alt-slot-${i}`));
   private tray = new CanvasPanel(LAYOUT.tray.w, LAYOUT.tray.h, 'outbox-tray');
-  private glow = new CanvasPanel(LAYOUT.invite.w + GLOW_PAD * 2, LAYOUT.invite.h + GLOW_PAD * 2, 'invite-glow');
+  readonly chipPanels = LAYOUT.chips.map((r, i) => new CanvasPanel(r.w, r.h, `chip-${CHIPS[i].id}`));
+  private replanPanel = new CanvasPanel(LAYOUT.replan.w, LAYOUT.replan.h, 'replan-card');
+  readonly replanButtons = [
+    new CanvasPanel(LAYOUT.replanYes.w, LAYOUT.replanYes.h, 'replan-yes'),
+    new CanvasPanel(LAYOUT.replanNo.w, LAYOUT.replanNo.h, 'replan-no'),
+  ];
+  private cue = new CanvasPanel(BOARD.width + 0.08, BOARD.height + 0.08, 'wall-cue');
+  readonly inviteCard = new CanvasPanel(INVITE.w, INVITE.h, 'invite-card');
+  private glow = new CanvasPanel(INVITE.w + GLOW_PAD * 2, INVITE.h + GLOW_PAD * 2, 'invite-glow');
   private ring = new Group();
   private ringFill: Mesh<RingGeometry, MeshBasicMaterial>;
-  private flyer: Mesh;
-  private flyT = -1;
-  readonly chipPanels = LAYOUT.chips.map((r, i) => new CanvasPanel(r.w, r.h, `chip-${CHIPS[i].id}`));
   private chipLooks: string[] = CHIPS.map(() => '');
   private agentLine = { text: '', color: COLORS.muted };
+  private invitePlan: Plan | null = null;
+  private inviteKey = '';
+  private replanText: string | null = null;
   private hoverInvite = false;
   private hoverAlt: number | null = null;
+  private hoverReplan: number | null = null;
+  /** Sweep progress 0..1, and the last drawn sweep step (redraw only on change). */
+  private sweep = 1;
+  private sweepStep = -1;
+  private cueT = -1;
+  private popT = -1;
 
-  constructor(private cal: CalendarData) {
+  constructor() {
     this.object.name = 'agent-wall';
-    this.add(this.backPanel.mesh, 0, 0, 0, 1);
-    this.add(this.glow.mesh, LAYOUT.invite.x, LAYOUT.invite.y, Z.glow, 2);
-    this.add(this.slotCard.mesh, LAYOUT.slot.x, LAYOUT.slot.y, Z.card, 3);
-    this.add(this.inviteCard.mesh, LAYOUT.invite.x, LAYOUT.invite.y, Z.card, 3);
-    this.altRows.forEach((row, i) => this.add(row.mesh, LAYOUT.alts[i].x, LAYOUT.alts[i].y, Z.alt, 4));
-    this.add(this.tray.mesh, LAYOUT.tray.x, LAYOUT.tray.y, Z.card, 3);
-    this.chipPanels.forEach((chip, i) => this.add(chip.mesh, LAYOUT.chips[i].x, LAYOUT.chips[i].y, Z.alt, 4));
+    this.desk.name = 'agent-desk';
+    this.add(this.object, this.backPanel.mesh, 0, 0, 0, 1);
+    this.add(this.object, this.mural.mesh, LAYOUT.mural.x, LAYOUT.mural.y, Z.mural, 3);
+    this.altRows.forEach((row) => this.add(this.object, row.mesh, 0, 0, Z.pill, 4));
+    this.add(this.object, this.tray.mesh, LAYOUT.tray.x, LAYOUT.tray.y, Z.mural, 3);
+    this.chipPanels.forEach((chip, i) => this.add(this.object, chip.mesh, LAYOUT.chips[i].x, LAYOUT.chips[i].y, Z.pill, 4));
+    this.add(this.object, this.replanPanel.mesh, LAYOUT.replan.x, LAYOUT.replan.y, Z.replan, 5);
+    this.add(this.object, this.replanButtons[0].mesh, LAYOUT.replanYes.x, LAYOUT.replanYes.y, Z.button, 6);
+    this.add(this.object, this.replanButtons[1].mesh, LAYOUT.replanNo.x, LAYOUT.replanNo.y, Z.button, 6);
+    this.add(this.object, this.cue.mesh, 0, 0, Z.cue, 7);
     CHIPS.forEach((_c, i) => this.setChip(i, 'normal'));
 
-    // Approval ring: dark disc, faint track, amber fill that grows clockwise from 12 o'clock.
+    // Desk: glow behind the invite, the invite, and the ring in front.
+    this.add(this.desk, this.glow.mesh, 0, 0, -0.002, 2);
+    this.add(this.desk, this.inviteCard.mesh, 0, 0, 0, 3);
     const disc = new Mesh(
       new CircleGeometry(0.085, 48),
       new MeshBasicMaterial({ color: 0x10141c, transparent: true, opacity: 0.85, depthWrite: false }),
@@ -135,53 +165,100 @@ export class Board {
     this.ringFill.scale.x = -1; // mirror: counter-clockwise geometry fills clockwise
     this.ringFill.position.z = 0.001;
     this.ring.add(disc, track, this.ringFill);
-    this.ring.renderOrder = 6;
     disc.renderOrder = 6;
     track.renderOrder = 7;
     this.ringFill.renderOrder = 8;
-    this.ring.position.set(LAYOUT.invite.x, LAYOUT.invite.y, Z.ring);
+    this.ring.position.set(0, 0, 0.012);
     this.ring.visible = false;
-    this.object.add(this.ring);
+    this.desk.add(this.ring);
+    this.desk.scale.setScalar(INVITE.deskScale);
+    this.desk.visible = false;
 
-    // The flying copy of the invite on approval (shares the card's texture).
-    this.flyer = new Mesh(this.inviteCard.mesh.geometry, this.inviteCard.mesh.material);
-    this.flyer.visible = false;
-    this.flyer.renderOrder = 9;
-    this.object.add(this.flyer);
-
-    for (const m of [this.slotCard, this.inviteCard, this.glow, ...this.altRows]) m.mesh.visible = false;
+    for (const m of [this.mural, this.glow, this.replanPanel, ...this.altRows, ...this.replanButtons, this.cue]) {
+      m.mesh.visible = false;
+    }
     this.glow.draw((c, w, h) => drawGlow(c, w, h, GLOW_PAD * PX_PER_M * 0.5));
+    this.cue.draw((c, w, h) => {
+      c.shadowColor = '#7fb2ff';
+      c.shadowBlur = 30;
+      c.lineWidth = 10;
+      c.strokeStyle = '#9cc4ff';
+      roundRect(c, 20, 20, w - 40, h - 40, 40);
+      c.stroke();
+    });
+    this.replanButtons[0].draw((c, w, h) => drawButton(c, w, h, 'Re-plan', true, false));
+    this.replanButtons[1].draw((c, w, h) => drawButton(c, w, h, 'Not now', false, false));
     this.setOutbox([]);
     this.object.visible = false;
     this.drawBack();
   }
 
-  private add(mesh: Mesh, x: number, y: number, z: number, order: number): void {
+  private add(parent: Group, mesh: Mesh, x: number, y: number, z: number, order: number): void {
     mesh.position.set(x, y, z);
     mesh.renderOrder = order;
-    this.object.add(mesh);
+    parent.add(mesh);
   }
 
   setStatus(status: BoardStatus): void {
     if (status === this.status) return;
+    const landed = status === 'wall' && this.status !== 'wall';
     this.status = status;
     this.drawBack();
+    if (landed) this.landCue();
   }
 
-  /** Show a plan. Redraws only when plan.version changes. */
-  setPlan(plan: Plan | null): void {
-    if (plan === this.plan) return;
-    const changed = !this.plan || !plan || plan.version !== this.plan.version;
-    this.plan = plan;
-    if (!changed) return;
-    const show = plan !== null;
-    this.slotCard.mesh.visible = this.inviteCard.mesh.visible = show;
-    if (plan) {
-      this.slotCard.draw((c, w, h) => drawSlotCard(c, w, h, plan, this.cal));
-      this.inviteCard.draw((c, w, h) => drawInviteCard(c, w, h, plan));
+  /** Brief glowing outline when the board locks onto a real wall (Meta: cue surface landing). */
+  landCue(): void {
+    this.cueT = 0;
+    this.cue.mesh.visible = true;
+  }
+
+  /**
+   * Show the whole state. Redraws only what changed. A new plan (new slot or
+   * rule) replays the agent's sweep across the week unless `animate` is false.
+   */
+  render(view: BoardView, animate = true): void {
+    const planChanged = view.plan !== this.plan;
+    const newPlan =
+      planChanged &&
+      (!this.plan ||
+        !view.plan ||
+        this.plan.slot?.id !== view.plan.slot?.id ||
+        this.plan.constraintText !== view.plan.constraintText);
+    const weekChanged = view.week !== this.week || view.fresh.size !== this.fresh.size;
+    this.plan = view.plan;
+    this.week = view.week;
+    this.fresh = view.fresh;
+
+    if (planChanged) this.drawBack();
+    if (newPlan && view.plan) {
+      this.sweep = animate ? 0 : 1;
+      this.sweepStep = -1;
     }
-    this.drawAlts();
-    this.drawBack();
+    this.mural.mesh.visible = view.plan !== null && view.week !== null;
+    if (planChanged || weekChanged) this.sweepStep = -1; // force a mural redraw
+    this.drawMuralIfNeeded();
+
+    // Desk invite card.
+    this.desk.visible = view.plan?.invite != null && this.object.visible;
+    // Redraw when the plan object or the extras change (versions can repeat after a reset).
+    const key = JSON.stringify(view.invite);
+    if (view.plan && (view.plan !== this.invitePlan || key !== this.inviteKey)) {
+      this.invitePlan = view.plan;
+      this.inviteKey = key;
+      const plan = view.plan;
+      this.inviteCard.draw((c, w, h) => drawInviteCard(c, w, h, plan, view.invite));
+    }
+
+    // Re-plan card.
+    if (view.replanText !== this.replanText) {
+      this.replanText = view.replanText;
+      const text = view.replanText;
+      const show = text !== null;
+      this.replanPanel.mesh.visible = show;
+      this.replanButtons.forEach((b) => (b.mesh.visible = show));
+      if (text) this.replanPanel.draw((c, w, h) => drawReplanCard(c, w, h, text));
+    }
   }
 
   /** Redraw one chip, only when its look or label changed. */
@@ -204,12 +281,17 @@ export class Board {
     this.tray.draw((c, w, h) => drawTray(c, w, h, items));
   }
 
-  /** Hover feedback: brighter glow on the invite, highlighted alt row. */
-  setHover(invite: boolean, alt: number | null): void {
+  /** Hover feedback: brighter glow on the invite, highlighted pill or button. */
+  setHover(invite: boolean, alt: number | null, replan: number | null = null): void {
     this.hoverInvite = invite;
     if (alt !== this.hoverAlt) {
       this.hoverAlt = alt;
-      this.drawAlts();
+      this.drawPills();
+    }
+    if (replan !== this.hoverReplan) {
+      this.hoverReplan = replan;
+      this.replanButtons[0].draw((c, w, h) => drawButton(c, w, h, 'Re-plan', true, replan === 0));
+      this.replanButtons[1].draw((c, w, h) => drawButton(c, w, h, 'Not now', false, replan === 1));
     }
   }
 
@@ -220,43 +302,92 @@ export class Board {
     this.ringFill.geometry.setDrawRange(0, segs * 6);
   }
 
-  /** Start the "invite flies into the outbox" animation. */
+  /** A small "pop" of the desk card on approval. */
   celebrate(): void {
-    this.flyT = 0;
-    this.flyer.visible = true;
+    this.popT = 0;
   }
 
-  /** Per-frame animation (glow pulse, fly). Cheap: no allocation, no redraws. */
+  /** True while the agent's sweep is still playing. */
+  get sweeping(): boolean {
+    return this.sweep < 1;
+  }
+
+  /** Per-frame animation. Cheap: no allocation; canvases redraw only on sweep steps. */
   tick(dt: number, time: number): void {
-    const needs = this.plan?.invite != null && this.plan.approval === 'needs';
-    this.glow.mesh.visible = needs && this.object.visible;
+    const needs = this.plan?.invite != null && this.plan.approval === 'needs' && !this.sweeping;
+    this.glow.mesh.visible = needs && this.desk.visible;
     if (this.glow.mesh.visible) {
       const pulse = 0.55 + 0.35 * Math.sin(time * 3.2);
       (this.glow.mesh.material as MeshBasicMaterial).opacity = this.hoverInvite ? 1 : pulse;
     }
-    if (this.flyT >= 0) {
-      this.flyT += dt;
-      const t = Math.min(1, this.flyT / FLY_SECONDS);
-      const e = t * t * (3 - 2 * t); // smoothstep
-      const from = LAYOUT.invite;
-      const to = LAYOUT.tray;
-      this.flyer.position.set(
-        from.x + (to.x - from.x + 0.1) * e,
-        from.y + (to.y - from.y) * e,
-        Z.ring + 0.01,
-      );
-      this.flyer.scale.setScalar(1 - 0.85 * e);
+    if (this.sweep < 1) {
+      this.sweep = Math.min(1, this.sweep + dt / SWEEP_SECONDS);
+      this.drawMuralIfNeeded();
+    }
+    if (this.cueT >= 0) {
+      this.cueT += dt;
+      const t = Math.min(1, this.cueT / 0.9);
+      this.cue.mesh.scale.setScalar(1.06 - 0.06 * t);
+      (this.cue.mesh.material as MeshBasicMaterial).opacity = 1 - t;
       if (t >= 1) {
-        this.flyT = -1;
-        this.flyer.visible = false;
+        this.cueT = -1;
+        this.cue.mesh.visible = false;
       }
+    }
+    if (this.popT >= 0) {
+      this.popT += dt;
+      const t = Math.min(1, this.popT / 0.4);
+      this.desk.scale.setScalar(INVITE.deskScale * (1 + 0.08 * Math.sin(Math.PI * t)));
+      if (t >= 1) this.popT = -1;
     }
   }
 
-  private drawAlts(): void {
+  private drawMuralIfNeeded(): void {
+    const plan = this.plan;
+    const week = this.week;
+    if (!plan || !week) return;
+    const steps = week.days.length + 1;
+    const step = this.sweep >= 1 ? steps : Math.floor(this.sweep * steps);
+    if (step === this.sweepStep) return;
+    this.sweepStep = step;
+    const view: MuralView = {
+      week,
+      chosen: plan.slot,
+      alternatives: plan.alternatives,
+      progress: this.sweep >= 1 ? 1 : step / steps,
+      reason: plan.reason,
+      tag: plan.by === 'ai' ? 'AI' : plan.by === 'you' ? 'YOU' : 'RULES',
+      fresh: this.fresh,
+    };
+    this.mural.draw((c, w, h) => drawMural(c, w, h, view));
+    this.placePills();
+    this.drawPills();
+  }
+
+  /** Put the runner-up pills over their cells on the mural (visible once the sweep ends). */
+  private placePills(): void {
+    const plan = this.plan;
+    const week = this.week;
+    const done = this.sweep >= 1;
+    this.altRows.forEach((row, i) => {
+      const alt = plan?.alternatives[i];
+      const di = alt && week ? week.days.indexOf(alt.day) : -1;
+      row.mesh.visible = !!alt && di >= 0 && done && this.mural.mesh.visible;
+      if (!row.mesh.visible || !alt || !week) return;
+      const g = muralGrid(this.mural.w, this.mural.h, week);
+      const cx = g.x(di) + g.colW / 2;
+      const cy = g.y(alt.start) + g.rowH / 2;
+      row.mesh.position.set(
+        LAYOUT.mural.x - LAYOUT.mural.w / 2 + px(cx),
+        LAYOUT.mural.y + LAYOUT.mural.h / 2 - px(cy),
+        Z.pill,
+      );
+    });
+  }
+
+  private drawPills(): void {
     const alts = this.plan?.alternatives ?? [];
     this.altRows.forEach((row, i) => {
-      row.mesh.visible = this.plan !== null && i < alts.length;
       if (row.mesh.visible) row.draw((c, w, h) => drawAltRow(c, w, h, alts[i], this.hoverAlt === i));
     });
   }
@@ -313,34 +444,36 @@ export class Board {
         c.fillStyle = COLORS.muted;
         const how = 'Point your hand at a chip, then tap your thumb and index finger together';
         c.fillText(how, (W - c.measureText(how).width) / 2, mid + 36);
-        return;
       }
-
-      // Link arrow between the cards: Slot -> Invite ("uses").
-      const toPx = (xm: number) => (xm + BOARD.width / 2) * PX_PER_M;
-      const toPy = (ym: number) => (BOARD.height / 2 - ym) * PX_PER_M;
-      const x0 = toPx(LAYOUT.gap.from) + 6;
-      const x1 = toPx(LAYOUT.gap.to) - 6;
-      const y = toPy(LAYOUT.slot.y);
-      c.strokeStyle = COLORS.link;
-      c.fillStyle = COLORS.link;
-      c.lineWidth = 5;
-      c.beginPath();
-      c.moveTo(x0, y);
-      c.lineTo(x1 - 14, y);
-      c.stroke();
-      c.beginPath();
-      c.moveTo(x1, y);
-      c.lineTo(x1 - 18, y - 12);
-      c.lineTo(x1 - 18, y + 12);
-      c.closePath();
-      c.fill();
-      c.beginPath();
-      c.arc(x0, y, 7, 0, Math.PI * 2);
-      c.fill();
-      font(c, 20, 700);
-      const word = 'uses';
-      c.fillText(word, (x0 + x1) / 2 - c.measureText(word).width / 2, y - 18);
     });
   }
+}
+
+function drawButton(c: CanvasRenderingContext2D, w: number, h: number, text: string, primary: boolean, hover: boolean): void {
+  roundRect(c, 2, 2, w - 4, h - 4, (h - 4) / 2);
+  c.fillStyle = primary ? (hover ? '#9cc4ff' : COLORS.link) : hover ? 'rgba(255,255,255,0.3)' : 'rgba(255,255,255,0.12)';
+  c.fill();
+  c.lineWidth = 3;
+  c.strokeStyle = primary ? COLORS.link : COLORS.line;
+  c.stroke();
+  font(c, 26, 800);
+  c.fillStyle = primary ? COLORS.ink : COLORS.text;
+  c.textBaseline = 'middle';
+  c.fillText(text, (w - c.measureText(text).width) / 2, h / 2 + 1);
+  c.textBaseline = 'alphabetic';
+}
+
+function drawReplanCard(c: CanvasRenderingContext2D, w: number, h: number, text: string): void {
+  roundRect(c, 3, 3, w - 6, h - 6, 22);
+  c.fillStyle = 'rgba(40, 22, 22, 0.97)';
+  c.fill();
+  c.lineWidth = 4;
+  c.strokeStyle = '#e5534b';
+  c.stroke();
+  font(c, 18, 800);
+  c.fillStyle = '#ff9a90';
+  c.fillText('AGENT NOTICED A CONFLICT', 24, 34);
+  font(c, 22, 600);
+  c.fillStyle = COLORS.text;
+  drawWrapped(c, text, 24, 66, w * 0.55, 28, 2);
 }

@@ -6,20 +6,39 @@ and nothing goes out until you pinch and hold to approve.
 Entry for the Meta VR Start Developer Competition 2026 (Productivity track).
 Built with Meta's [Immersive Web SDK](https://iwsdk.dev) (WebXR), hands only.
 
-**Status: Day 5.** Feature-frozen; real AI connected; not yet tested on a real
-Quest. **Have a Quest? Please try the 10-step checklist:
-[docs/TESTING-ON-QUEST.md](docs/TESTING-ON-QUEST.md).**
+**Status: 14 Nov, after Day 5.** Real AI connected; tested in Meta's Quest 3
+emulator only, not yet on a real Quest. **Have a Quest? Please try the 10-step
+checklist: [docs/TESTING-ON-QUEST.md](docs/TESTING-ON-QUEST.md).**
 
 1. The app finds a wall and puts the board on it (or floats it 1.2 m in front
    of you if there is no wall).
 2. **Ask the agent** by pinching a chip ("Find time + draft invite", "Only after
    4 PM", "Thursday", "Not Wed", "Any time") or pinch **🎤 Speak** and say it.
-3. The agent makes two linked cards: a **Slot** (best free time from a sample
-   calendar) and an **Invite** email for that time. Change the rule, or pinch an
-   "Also free" row, and the invite rewrites itself and needs approval again.
-4. **Pinch and hold the invite for 1 second** to approve it into the **Demo
-   outbox**. Nothing is really sent.
-5. The board is saved in your browser, so it is there when you come back.
+3. **The week mural:** the agent sweeps Mon–Fri across your wall. Every time it
+   can't use is struck out with the reason (you busy, Sam busy, too close to a
+   meeting, your rule). One slot lights up gold; the runner-ups are outlined,
+   and you can pinch one to pick it yourself. If the pick has a catch, the card
+   says so ("Trade-off: only 10 min after Sam's class").
+4. **The decision tray:** the invite lands on your real table (or just above
+   your lap if there is no table in reach). **Pinch and hold it for 1 second**
+   to approve. You get **5 seconds to Unsend** (pinch again), then it goes to
+   the **Demo outbox** with a receipt that says which part came from your
+   rules, the AI and you. Nothing is really sent.
+5. **The agent keeps watch:** a few seconds later a SAMPLE change lands on the
+   approved time ("Dentist"). The mural shows it in red, the invite shows the
+   conflict, and a **Re-plan?** card appears. Re-planning moves the invite to a
+   new time, and it needs your hold again. The agent never re-sends on its own.
+6. The board is saved in your browser, so it is there when you come back.
+
+Screenshots from Meta's Quest 3 emulator (IWER), not a real headset:
+
+| The agent sweeps the week | The week mural, gold pick |
+| --- | --- |
+| ![Agent sweeping the week](docs/screenshots/wall-agent-sweeping.png) | ![Week mural](docs/screenshots/wall-week-mural.png) |
+| **Invite on the real table: hold to approve** | **5 s to Unsend** |
+| ![Needs approval](docs/screenshots/desk-1-needs-approval.png) | ![Unsend window](docs/screenshots/desk-2-unsend-window.png) |
+| **Receipt: RULES / YOU / DEMO** | **Agent keeps watch: conflict + Re-plan?** |
+| ![Receipt](docs/screenshots/desk-3-receipt.png) | ![Re-plan](docs/screenshots/desk-4-replan.png) |
 
 All calendar data is **sample data** (`src/data/sample-calendar.json`). Nothing
 reads a real calendar and nothing is sent.
@@ -39,7 +58,7 @@ Needs Node 20.19+, 22.12+ or 24.
 ```bash
 npm install
 npm run dev          # dev server + Meta Quest 3 emulator (IWER) in a managed browser
-npm test             # unit tests (Vitest): wall choice and fallback logic
+npm test             # unit tests (Vitest): placement, scheduler, agent checks, week, desk, receipt
 npm run typecheck
 npm run build        # static site in dist/
 ```
@@ -81,11 +100,30 @@ npx iwsdk dev down
 - `src/logic/hold.ts`: pinch-and-hold timer. 1 s to approve; ray flicker up to
   0.15 s is forgiven; letting go drains the ring; after approving, the pinch
   must be released before anything can be approved again.
-- `src/logic/plan.ts` (`approve`, `addToOutbox`): only an invite that needs
-  approval and is linked to the shown slot can be approved.
-- `src/board-system.ts`: IWSDK `RayInteractable` on the invite and the "Also
-  free" rows; a hand ray adds `Hovered`, a pinch adds `Pressed`. In the desktop
-  preview the mouse does the same.
+- `src/logic/plan.ts` (`approve`, `addToOutbox`, `unapprove`, `buildReceipt`):
+  only an invite that needs approval and is linked to the shown slot can be
+  approved. An approved invite sits in a 5 s Unsend window, then gets its
+  RULES / AI / YOU receipt.
+- `src/logic/desk.ts`: picks a horizontal plane labelled table or desk at
+  0.55–1.15 m high and within 1 m reach for the invite; otherwise the lap spot.
+- `src/logic/watch.ts`: the SAMPLE change the agent notices after you approve.
+- `src/board-system.ts`: IWSDK `RayInteractable` on the invite, the
+  alternatives and the chips (pinch only: a finger-poke target on the desk card
+  would take priority over the hand ray and block the chips). A pinch that starts
+  on the invite keeps holding until the hand opens, even if the ray drifts off
+  the card. In the desktop preview the mouse does the same.
+- Every press captures the hand ray until the pinch opens. Without that,
+  IWSDK 1.0.1 drops a release that ends on empty space (e.g. a pinched "Also
+  free" pill moves away under the ray) and the next pinch is swallowed. Found
+  and fixed with the emulator replay `scripts/emu/pinch-replay.mjs`.
+
+## How the week mural is drawn
+
+- `src/logic/week.ts`: for every half hour of the sample week, says why it can't
+  be used (past, busy, buffer, rule) or that it is free; also finds the
+  trade-off line for the chosen time.
+- `src/ui/mural.ts`: draws the week on one canvas texture; the sweep animates
+  over 1.8 s, then the gold pick and the runner-ups appear.
 
 ## The AI, and why the demo never breaks
 

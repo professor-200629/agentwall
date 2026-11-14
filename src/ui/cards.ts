@@ -2,7 +2,7 @@
  * Drawing for the two linked cards. Pure canvas code: (context, size, plan) in,
  * pixels out. Layout numbers are canvas pixels.
  */
-import type { Plan } from '../logic/plan.js';
+import type { Plan, ReceiptLine } from '../logic/plan.js';
 import { clock, clockRange, dayLabel, type CalendarData, type Slot } from '../logic/scheduler.js';
 import { COLORS, drawWrapped, font, pill, roundRect } from './canvas-panel.js';
 
@@ -30,7 +30,6 @@ function label(c: CanvasRenderingContext2D, text: string, color: string): void {
   c.fillText(text.split('').join(' '), PAD, 56);
 }
 
-const shortSlot = (s: Slot) => `${dayLabel(s.day).short} · ${clock(s.start)}`;
 
 export function drawSlotCard(
   c: CanvasRenderingContext2D,
@@ -103,26 +102,54 @@ export function drawAltRow(
   c.lineWidth = hovered ? 3 : 2;
   c.strokeStyle = hovered ? COLORS.link : COLORS.line;
   c.stroke();
-  font(c, 24, 500);
-  c.fillStyle = COLORS.text;
   c.textBaseline = 'middle';
-  c.fillText(shortSlot(slot), 16, h / 2 + 1);
-  font(c, 20, 700);
+  // The pill sits on its own day column of the mural, so the time alone is enough;
+  // "Thu 19 Nov · 4:00 PM" does not fit a 20 cm pill.
+  const icon = '⇄';
+  font(c, 24, 800);
+  const iconW = c.measureText(icon).width;
+  let size = 26;
+  const label = clock(slot.start);
+  font(c, size, 700);
+  while (size > 14 && c.measureText(label).width > w - 36 - iconW) font(c, --size, 700);
+  c.fillStyle = COLORS.text;
+  c.fillText(label, 12, h / 2 + 1);
+  font(c, 24, 800);
   c.fillStyle = COLORS.link;
-  const use = 'USE ⇄';
-  c.fillText(use, w - 16 - c.measureText(use).width, h / 2 + 1);
+  c.fillText(icon, w - 12 - iconW, h / 2 + 1);
   c.textBaseline = 'alphabetic';
 }
+
+/** Extra state the desk invite card can show besides the plan itself. */
+export interface InviteExtras {
+  tradeOff: string | null;
+  /** Seconds left in the Unsend window, or null when not sending. */
+  sendingLeft: number | null;
+  /** Receipt lines once sent. */
+  receipt: ReceiptLine[] | null;
+  /** Conflict banner (the agent noticed the sample week changed). */
+  conflict: string | null;
+}
+
+const TAG_COLOR: Record<ReceiptLine['tag'], string> = {
+  RULES: 'rgba(255,255,255,0.28)',
+  AI: COLORS.link,
+  YOU: COLORS.green,
+  DEMO: COLORS.amber,
+};
 
 export function drawInviteCard(
   c: CanvasRenderingContext2D,
   w: number,
   h: number,
   plan: Plan,
+  x: InviteExtras = { tradeOff: null, sendingLeft: null, receipt: null, conflict: null },
 ): void {
   const approved = plan.approval === 'approved';
-  cardBody(c, w, h, COLORS.link);
-  label(c, 'INVITE DRAFT', COLORS.link);
+  const sending = approved && x.sendingLeft !== null;
+  const sent = approved && !sending && x.receipt !== null;
+  cardBody(c, w, h, x.conflict ? '#e5534b' : COLORS.link);
+  label(c, sent ? 'SENT TO DEMO OUTBOX' : 'INVITE DRAFT', sent ? COLORS.green : COLORS.link);
   const inner = w - PAD * 2;
 
   if (!plan.invite) {
@@ -134,7 +161,7 @@ export function drawInviteCard(
 
   pill(
     c,
-    approved ? 'APPROVED' : 'NEEDS APPROVAL',
+    sent ? 'SENT · DEMO' : sending ? 'SENDING' : approved ? 'APPROVED' : 'NEEDS APPROVAL',
     w - PAD,
     30,
     approved ? COLORS.green : COLORS.amber,
@@ -143,45 +170,75 @@ export function drawInviteCard(
     true,
   );
 
-  font(c, 24, 500);
-  c.fillStyle = COLORS.faint;
-  c.fillText('To', PAD, 112);
-  c.fillStyle = COLORS.muted;
-  c.fillText(plan.invite.to, PAD + 44, 112);
-
-  font(c, 28, 700);
-  c.fillStyle = COLORS.text;
-  let y = drawWrapped(c, plan.invite.subject, PAD, 156, inner, 36, 2);
-
-  c.fillStyle = COLORS.line;
-  c.fillRect(PAD, y - 14, inner, 2);
-  y += 22;
-
-  font(c, 26);
-  c.fillStyle = COLORS.muted;
-  const bottom = approved ? h - 76 : h - PAD;
-  for (const para of plan.invite.body.split('\n')) {
-    if (para === '') {
-      y += 12;
-      continue;
+  if (sent && x.receipt) {
+    // Receipt: who did what, tagged RULES / AI / YOU / DEMO.
+    font(c, 26, 700);
+    c.fillStyle = COLORS.text;
+    let y = drawWrapped(c, plan.invite.subject, PAD, 112, inner, 34, 2) + 8;
+    for (const line of x.receipt) {
+      font(c, 18, 800);
+      const tw = c.measureText(line.tag).width + 18;
+      roundRect(c, PAD, y - 22, tw, 30, 15);
+      c.fillStyle = TAG_COLOR[line.tag];
+      c.fill();
+      c.fillStyle = COLORS.ink;
+      c.fillText(line.tag, PAD + 9, y);
+      font(c, 23);
+      c.fillStyle = COLORS.muted;
+      y = drawWrapped(c, line.text, PAD + tw + 12, y, inner - tw - 12, 30, 2) + 12;
     }
-    const room = Math.floor((bottom - y) / 33) + 1;
-    if (room <= 0) break;
-    y = drawWrapped(c, para, PAD, y, inner, 33, room);
+  } else {
+    font(c, 24, 500);
+    c.fillStyle = COLORS.faint;
+    c.fillText('To', PAD, 112);
+    c.fillStyle = COLORS.muted;
+    c.fillText(plan.invite.to, PAD + 44, 112);
+
+    font(c, 28, 700);
+    c.fillStyle = COLORS.text;
+    let y = drawWrapped(c, plan.invite.subject, PAD, 156, inner, 36, 2);
+
+    if (x.tradeOff && !approved) {
+      font(c, 24, 700);
+      c.fillStyle = COLORS.amber;
+      y = drawWrapped(c, `⚠ ${x.tradeOff}`, PAD, y + 4, inner, 30, 2) + 4;
+    }
+
+    c.fillStyle = COLORS.line;
+    c.fillRect(PAD, y - 14, inner, 2);
+    y += 22;
+
+    font(c, 26);
+    c.fillStyle = sending ? COLORS.faint : COLORS.muted;
+    const bottom = h - (approved || !x.conflict ? 80 : 120);
+    for (const para of plan.invite.body.split('\n')) {
+      if (para === '') {
+        y += 12;
+        continue;
+      }
+      const room = Math.floor((bottom - y) / 33) + 1;
+      if (room <= 0) break;
+      y = drawWrapped(c, para, PAD, y, inner, 33, room);
+    }
   }
 
-  if (approved) {
-    const bandH = 58;
+  // Bottom band: what to do next.
+  const bandH = 64;
+  const band = (fill: string, text: string, ink: string) => {
     c.save();
     roundRect(c, 3, 3, w - 6, h - 6, 26);
     c.clip();
-    c.fillStyle = 'rgba(90, 209, 154, 0.92)';
+    c.fillStyle = fill;
     c.fillRect(0, h - bandH - 3, w, bandH + 3);
     c.restore();
-    font(c, 24, 700);
-    c.fillStyle = COLORS.ink;
-    c.fillText('✓ In the demo outbox · not really sent', PAD, h - 22);
-  }
+    font(c, 26, 800);
+    c.fillStyle = ink;
+    c.fillText(text, PAD, h - 24);
+  };
+  if (x.conflict) band('rgba(229, 83, 75, 0.95)', `⚠ ${x.conflict}`, '#ffffff');
+  else if (sending) band('rgba(90, 209, 154, 0.95)', `Sending in ${x.sendingLeft} s · pinch to Unsend`, COLORS.ink);
+  else if (sent) band('rgba(90, 209, 154, 0.25)', '✓ Nothing was really sent (demo)', COLORS.green);
+  else if (!approved) band('rgba(242, 184, 75, 0.22)', 'Pinch and hold 1 s to approve', COLORS.amber);
 }
 
 /** Amber halo drawn behind the invite while it needs approval. */

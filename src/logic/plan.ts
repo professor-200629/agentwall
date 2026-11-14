@@ -10,6 +10,7 @@
  * Plain TypeScript, no XR. Plans are immutable: every change returns a new one.
  */
 import {
+  clock,
   clockRange,
   dayLabel,
   schedule,
@@ -151,6 +152,53 @@ export interface OutboxItem {
   slotId: string;
   /** ISO time the user approved it (real clock, for display). */
   approvedAt: string;
+  /** 'sending' during the Unsend window, then 'sent' (into the demo outbox). */
+  status?: 'sending' | 'sent';
+  /** What the rules, the AI and the user each did (shown on the desk card). */
+  receipt?: ReceiptLine[];
+}
+
+export interface ReceiptLine {
+  tag: 'RULES' | 'AI' | 'YOU' | 'DEMO';
+  text: string;
+}
+
+/** Seconds the user has to pull an approved invite back. */
+export const UNSEND_SECONDS = 5;
+
+/** Undo an approval inside the Unsend window: the invite needs approval again. */
+export function unapprove(plan: Plan): Plan {
+  if (plan.approval !== 'approved') return plan;
+  return { ...plan, approval: 'needs', version: plan.version + 1 };
+}
+
+export function removeFromOutbox(outbox: OutboxItem[], id: string): OutboxItem[] {
+  return outbox.filter((o) => o.id !== id);
+}
+
+/** The finished receipt: five short lines tagged by who did what. */
+export function buildReceipt(
+  cal: CalendarData,
+  plan: Plan,
+  ruledOut: number,
+  approvedLabel: string,
+): ReceiptLine[] {
+  const first = dayLabel(cal.days[0]);
+  const last = dayLabel(cal.days[cal.days.length - 1]);
+  const pick = plan.slot ? `${dayLabel(plan.slot.day).short.split(' ')[0]} ${clock(plan.slot.start)}` : 'no time';
+  const picked: ReceiptLine =
+    plan.by === 'you'
+      ? { tag: 'YOU', text: `You picked ${pick}.` }
+      : plan.by === 'ai'
+        ? { tag: 'AI', text: `Picked ${pick}${plan.invite?.source === 'ai' ? ' and wrote the email' : ''}.` }
+        : { tag: 'RULES', text: `Picked ${pick} and wrote the email.` };
+  return [
+    { tag: 'RULES', text: `Read the sample week (${first.short.split(' ')[0]} ${first.short.split(' ')[1]}–${last.short.split(' ')[0]} ${last.short.split(' ')[1]} ${last.short.split(' ')[2]}).` },
+    { tag: 'RULES', text: `Ruled out ${ruledOut} half hours: busy, too soon or your rule.` },
+    picked,
+    { tag: 'YOU', text: `Held to approve at ${approvedLabel}.` },
+    { tag: 'DEMO', text: 'In the demo outbox. Nothing was sent.' },
+  ];
 }
 
 /**

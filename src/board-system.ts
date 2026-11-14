@@ -1,17 +1,23 @@
 /**
- * Agent Wall's main system.
+ * Agent Wall's main system. "The wall thinks, the desk decides, the agent keeps watch."
  *
- * - Places the board on a detected wall (or 1.2 m in front of the user).
- * - Asking: pinch a preset chip, or pinch 🎤 Speak and talk. The words go to
- *   the AI through our Worker; if it is slow (>3 s), offline or wrong, the
- *   rules plan instead and the board says so.
- * - Changing: pinch an "Also free" row to use that time.
- * - Approving: pinch and hold the invite for 1 s -> demo outbox.
+ * - Places the board on a detected wall (or 1.2 m in front of the user), and the
+ *   invite card on the user's real table (or above their lap).
+ * - Asking: pinch a preset chip, or pinch 🎤 Speak and talk. Known phrases set
+ *   the rule; the AI (via our Worker) picks the time and writes the email. If it
+ *   is slow (>3 s), offline or wrong, the rules plan instead and the board says so.
+ * - The week mural shows the agent striking out every time it can't use, with reasons.
+ * - Changing: pinch a runner-up pill on the mural to use that time.
+ * - Approving: pinch and hold the desk card 1 s -> 5 s "Sending… pinch to Unsend"
+ *   -> demo outbox with a receipt (RULES / AI / YOU).
+ * - Keeping watch: once, after the first send, a labelled SAMPLE change lands on
+ *   the approved time; the agent flags the conflict and offers to re-plan
+ *   (which always needs a fresh hold).
  * - Saving: the plan and outbox are kept in localStorage.
  *
  * Decisions live in ./logic (plain TS, unit-tested). Pinch input comes from
- * IWSDK RayInteractable: a hand ray (or the mouse in the desktop preview)
- * adds Hovered; pinching adds Pressed.
+ * IWSDK RayInteractable: a hand ray (or the mouse in the
+ * desktop preview) adds Hovered; pinching adds Pressed.
  */
 import {
   createSystem,
@@ -24,32 +30,61 @@ import {
   XRPlane,
   type Entity,
 } from '@iwsdk/core';
-import { Board } from './board.js';
+import { Board, INVITE } from './board.js';
 import { CHIPS } from './chips.js';
 import calendarJson from './data/sample-calendar.json';
 import { runAgent, type AgentResult, type FetchLike } from './logic/agent.js';
+import { chooseDesk, type DeskPlacement } from './logic/desk.js';
 import { HOLD, HoldToApprove } from './logic/hold.js';
 import { PlacementController } from './logic/placement-controller.js';
 import { fallbackPlacement, type PlaneInput, type Placement } from './logic/placement.js';
-import { addToOutbox, approve, chooseSlot, isLinked, type OutboxItem, type Plan } from './logic/plan.js';
+import {
+  addToOutbox,
+  approve,
+  buildReceipt,
+  chooseSlot,
+  DEMO_TASK,
+  isLinked,
+  removeFromOutbox,
+  unapprove,
+  UNSEND_SECONDS,
+  type OutboxItem,
+  type Plan,
+} from './logic/plan.js';
 import { parseRequest } from './logic/request.js';
-import type { CalendarData } from './logic/scheduler.js';
+import { clock, dayLabel, type CalendarData } from './logic/scheduler.js';
 import { restore, serialize, STORAGE_KEY } from './logic/storage.js';
+import { sampleChange, stillFree, WATCH_DELAY_SECONDS, withGuestBusy } from './logic/watch.js';
+import { tradeOff, weekModel, type WeekModel } from './logic/week.js';
 import { playApproved, playTick, unlockAudio } from './ui/sound.js';
+import type { InviteExtras } from './ui/cards.js';
 import { VoiceInput } from './voice.js';
 
-const calendar = calendarJson as CalendarData;
+const baseCalendar = calendarJson as CalendarData;
 /** The Worker URL is set at build time (GitHub Actions variable). Empty = rules only. */
 const AGENT_URL: string = String(import.meta.env.VITE_AGENT_URL ?? '').trim();
 const MODEL_LABEL = 'Groq';
 /** Each chip's rule, parsed once (not every frame). */
-const CHIP_RULES = CHIPS.map((c) => parseRequest(c.say, calendar).rule);
+const CHIP_RULES = CHIPS.map((c) => parseRequest(c.say, baseCalendar).rule);
 
 /** An Object3D as IWSDK's pointer system (@pmndrs/pointer-events) sees it. */
 interface PointerTarget {
-  addEventListener(type: 'pointerdown' | 'pointerup', listener: (e: { pointerId: number }) => void): void;
+  addEventListener(type: 'pointerdown', listener: (e: { pointerId: number; pointerType: string }) => void): void;
   setPointerCapture(pointerId: number): void;
-  releasePointerCapture(pointerId: number): void;
+}
+
+/**
+ * Capture the pointer for the length of a pinch. IWSDK 1.0.1 (MultiPointer,
+ * processButtonLifecycle) drops the release when the ray ends on empty space:
+ * the hand stays "selecting" and the NEXT pinch is swallowed as the release.
+ * That happened every time a pinched "Also free" row moved under the ray, and
+ * whenever a hold was released while pointing away. A captured ray keeps its hit,
+ * so the release always arrives, and up() frees the capture again.
+ * Never for the fingertip (touch) pointer: it only lets go when it loses its hit,
+ * which a capture prevents, so it would own the hand for good.
+ */
+function capture(target: PointerTarget, e: { pointerId: number; pointerType: string }): void {
+  if (e.pointerType !== 'touch') target.setPointerCapture(e.pointerId);
 }
 
 interface NativePlane {
@@ -57,6 +92,8 @@ interface NativePlane {
   semanticLabel?: string;
   polygon: ReadonlyArray<{ x: number; z: number }>;
 }
+
+type Press = { kind: 'chip' | 'alt' | 'replan'; index: number } | { kind: 'invite'; index: 0 };
 
 export interface AgentWallDebug {
   state: () => string;
@@ -75,18 +112,34 @@ export interface AgentWallDebug {
     inviteHovered: boolean;
     invitePressed: boolean;
     altHovered: number | null;
+    chipHovered: number | null;
+    presses: number;
+    inviteHeld: boolean;
+    boardVisible: boolean;
     peakHold: number;
     busy: boolean;
     agentLine: string;
     lastAskMs: number;
   };
   outbox: () => OutboxItem[];
+  /** Where the invite card went: the real table or the lap spot. */
+  desk: () => { kind: string; position: number[]; visible: boolean } | null;
+  /** The week mural: sweep still playing? how many half hours ruled out? */
+  mural: () => { visible: boolean; sweeping: boolean; ruledOut: number; fresh: number };
+  /** Unsend window and conflict state. */
+  flow: () => { sendingLeft: number | null; conflict: string | null; replan: boolean; watchFired: boolean; clock: number };
+  /** Test hook: fire the agent's sample change now (instead of 8 s after the first send). */
+  watchNow: () => void;
+  /** Test hook: turn the automatic sample change on/off (off keeps long test runs predictable). */
+  setWatch: (on: boolean) => void;
   /** Test hook: what the mic would have heard (the emulator has no microphone). */
   heard: (text: string) => Promise<void>;
   /** Test hook: point the agent at a fake AI: an answer object, 'offline', or null to undo. */
   fakeAi: (answer: unknown, delayMs?: number) => void;
   /** Test hook: make the hold longer so a screenshot can catch the ring mid-fill. */
   setHoldSeconds: (seconds: number) => void;
+  /** Test hook: a longer Unsend window (emulator commands take ~1 s each). */
+  setUnsendSeconds: (seconds: number) => void;
   /** Test hook: clear the outbox, the plan and the saved board. */
   resetDemo: () => void;
   /** Test hook: the saved JSON, as reopening the app would read it. */
@@ -122,6 +175,9 @@ function savedLabel(iso: string): string {
   return d.toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
 }
 
+const nowLabel = () => new Date().toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+const shortWhen = (day: string, min: number) => `${dayLabel(day).short.split(' ')[0]} ${clock(min)}`;
+
 export class BoardSystem extends createSystem({
   planes: { required: [XRPlane] },
 }) {
@@ -134,51 +190,96 @@ export class BoardSystem extends createSystem({
   private tmp = new Vector3();
   private lastPlanes: PlaneInput[] = [];
   private noPlanes = false;
+  private cal: CalendarData = baseCalendar;
   private plan: Plan | null = null;
   private outbox: OutboxItem[] = [];
+  private week: WeekModel | null = null;
+  private weekKey = '';
+  private tradeOffText: { plan: Plan | null; text: string | null } = { plan: null, text: null };
   private hold = new HoldToApprove();
   private inviteEntity!: Entity;
   private altEntities: Entity[] = [];
   private chipEntities: Entity[] = [];
-  /**
-   * Presses on chips and "Also free" rows, collected from pointerdown events.
-   * A fast click can press and release between two frames, so polling the
-   * Pressed tag could miss it; the event never does.
-   */
-  private presses: Array<{ kind: 'chip' | 'alt'; index: number }> = [];
+  private replanEntities: Entity[] = [];
+  private presses: Press[] = [];
+  /** Total presses received (debug/test hook). */
+  private pressCount = 0;
   private holdPlanVersion = -1;
   private peakHold = 0;
   private busy = false;
   private requestId = 0;
   private agentLineText = '';
-  /** How long the last request took, ms (AI or fallback). */
   private lastAskMs = 0;
   private voice!: VoiceInput;
   private agentUrl = AGENT_URL;
   private fetchImpl: FetchLike | undefined;
+  private animateNext = true;
+  /** Seconds since start (render clock), for the Unsend window and the watch timer. */
+  private clockS = 0;
+  private currentItemId: string | null = null;
+  private sendingUntil: number | null = null;
+  private watchEnabled = true;
+  private watchAt: number | null = null;
+  private watchFired = false;
+  private conflict: string | null = null;
+  private replanText: string | null = null;
+  private fresh = new Set<string>();
+  private deskPlace: DeskPlacement | null = null;
+  /** A pinch that started on the invite and has not been released yet. */
+  private inviteHeld = false;
+  private releaseHold: () => void = () => {};
+  private unsendSeconds = UNSEND_SECONDS;
 
   init(): void {
-    this.board = new Board(calendar);
+    this.board = new Board();
     const boardEntity = this.world.createTransformEntity(this.board.object);
-    const interactive = (mesh: Parameters<typeof this.world.createTransformEntity>[0]) => {
-      const e = this.world.createTransformEntity(mesh, { parent: boardEntity });
+    const deskEntity = this.world.createTransformEntity(this.board.desk);
+    const interactive = (mesh: Parameters<typeof this.world.createTransformEntity>[0], parent: Entity) => {
+      const e = this.world.createTransformEntity(mesh, { parent });
       e.addComponent(RayInteractable);
       return e;
     };
-    this.inviteEntity = interactive(this.board.inviteCard.mesh);
-    this.altEntities = this.board.altRows.map((row) => interactive(row.mesh));
-    this.chipEntities = this.board.chipPanels.map((chip) => interactive(chip.mesh));
+    this.inviteEntity = interactive(this.board.inviteCard.mesh, deskEntity);
+    // Pinch only, no finger poke: IWSDK gives the touch pointer priority over the ray
+    // whenever a fingertip is within 15 cm of a pokeable object, and this card sits
+    // where hands rest, so a poke target here would block pinching the wall chips.
+    this.altEntities = this.board.altRows.map((row) => interactive(row.mesh, boardEntity));
+    this.chipEntities = this.board.chipPanels.map((chip) => interactive(chip.mesh, boardEntity));
+    this.replanEntities = this.board.replanButtons.map((b) => interactive(b.mesh, boardEntity));
+
     // IWSDK's pointer system dispatches pointer events on the Object3D itself.
-    const onPress = (mesh: unknown, kind: 'chip' | 'alt', index: number) =>
-      (mesh as PointerTarget).addEventListener('pointerdown', () => this.presses.push({ kind, index }));
-    this.board.chipPanels.forEach((chip, i) => onPress(chip.mesh, 'chip', i));
-    this.board.altRows.forEach((row, i) => onPress(row.mesh, 'alt', i));
-    // Pinch-and-hold: capture the pointer on the invite so a hand ray that drifts off
-    // the card mid-hold keeps it pressed (without capture IWSDK drops Pressed on
-    // pointer-leave and only re-adds it on a new pinch; code review 14 Nov).
+    // A fast click can press and release between two frames, so presses are
+    // collected from pointerdown events instead of polling the Pressed tag.
+    const onPress = (mesh: unknown, press: Press) => {
+      const target = mesh as PointerTarget;
+      target.addEventListener('pointerdown', (e) => {
+        capture(target, e);
+        this.presses.push(press);
+      });
+    };
+    this.board.chipPanels.forEach((chip, i) => onPress(chip.mesh, { kind: 'chip', index: i }));
+    this.board.altRows.forEach((row, i) => onPress(row.mesh, { kind: 'alt', index: i }));
+    this.board.replanButtons.forEach((b, i) => onPress(b.mesh, { kind: 'replan', index: i }));
+    // Pinch-and-hold: a pinch that STARTS on the invite keeps holding until the hand
+    // opens (XR selectend, or mouse-up), even if the ray drifts off the card.
+    // The ray capture above already keeps the hit on the card; inviteHeld is a second,
+    // simpler guarantee that also covers the desktop mouse.
     const invite = this.board.inviteCard.mesh as unknown as PointerTarget;
-    invite.addEventListener('pointerdown', (e) => invite.setPointerCapture(e.pointerId));
-    invite.addEventListener('pointerup', (e) => invite.releasePointerCapture(e.pointerId));
+    invite.addEventListener('pointerdown', (e) => {
+      capture(invite, e);
+      this.inviteHeld = true;
+      this.presses.push({ kind: 'invite', index: 0 });
+    });
+    const release = () => {
+      this.inviteHeld = false;
+    };
+    window.addEventListener('pointerup', release);
+    window.addEventListener('pointercancel', release);
+    this.cleanupFuncs.push(() => {
+      window.removeEventListener('pointerup', release);
+      window.removeEventListener('pointercancel', release);
+    });
+    this.releaseHold = release;
 
     this.voice = new VoiceInput(
       this.agentUrl,
@@ -188,10 +289,17 @@ export class BoardSystem extends createSystem({
     );
 
     // Yesterday's board, if there is one.
-    const saved = restore(readStorage(), calendar);
+    const saved = restore(readStorage(), baseCalendar);
     if (saved) {
-      this.outbox = saved.outbox;
-      if (saved.plan) this.setPlan(saved.plan, false);
+      // An invite that was mid-Unsend when the app closed counts as sent.
+      this.outbox = saved.outbox.map((o) => (o.status === 'sending' ? { ...o, status: 'sent' as const } : o));
+      if (saved.plan) {
+        this.animateNext = false;
+        this.setPlan(saved.plan, false);
+        if (saved.plan.approval === 'approved') {
+          this.currentItemId = this.outbox.find((o) => o.slotId === saved.plan?.slot?.id)?.id ?? null;
+        }
+      }
       this.say(`Welcome back · board saved ${savedLabel(saved.savedAt)}`, 'ok');
     } else if (!this.agentUrl) {
       this.say('Rules mode (AI not connected)', 'muted');
@@ -200,10 +308,13 @@ export class BoardSystem extends createSystem({
 
     // A judge may enter through Quest Browser's own Enter button, which never clicks our
     // page, so sound would stay locked. XR select (pinch) events count as a user
-    // gesture: unlock audio on the first pinch of each session (code review 14 Nov).
+    // gesture: unlock audio on the first pinch of each session.
     const onSessionStart = () => {
       const session = this.xrManager.getSession();
       session?.addEventListener('selectstart', unlockAudio, { once: true });
+      // The hand opened (or tracking ended): the invite hold stops.
+      session?.addEventListener('selectend', () => this.releaseHold());
+      session?.addEventListener('end', () => this.releaseHold());
     };
     this.xrManager.addEventListener('sessionstart', onSessionStart);
     this.cleanupFuncs.push(() => this.xrManager.removeEventListener('sessionstart', onSessionStart));
@@ -217,6 +328,7 @@ export class BoardSystem extends createSystem({
         } else if (this.controller.state === 'idle') {
           this.pendingStart = true;
           this.board.object.visible = false;
+          this.board.desk.visible = false;
           this.board.setStatus('searching');
         }
       }),
@@ -226,9 +338,12 @@ export class BoardSystem extends createSystem({
   }
 
   update(delta: number, time: number): void {
+    this.clockS = time;
     this.voice.tick();
     this.updateInteraction(delta);
+    this.updateTimers();
     this.drawChips();
+    this.renderBoard();
     this.board.tick(delta, time);
     if (this.world.visibilityState.value === VisibilityState.NonImmersive) return;
     this.updatePlacement(time);
@@ -239,28 +354,72 @@ export class BoardSystem extends createSystem({
     this.board.setAgentLine(text, tone);
   }
 
+  // ---------- drawing state ----------
+
+  private currentWeek(): WeekModel | null {
+    if (!this.plan) return null;
+    const key = JSON.stringify([this.plan.constraint, this.cal.busy.guest.length]);
+    if (key !== this.weekKey) {
+      this.weekKey = key;
+      this.week = weekModel(this.cal, this.plan.constraint);
+    }
+    return this.week;
+  }
+
+  private inviteExtras(): InviteExtras {
+    const plan = this.plan;
+    if (plan && plan !== this.tradeOffText.plan) {
+      this.tradeOffText = {
+        plan,
+        text: plan.slot ? tradeOff(this.cal, plan.slot, plan.constraint) : null,
+      };
+    }
+    const item = this.currentItemId ? this.outbox.find((o) => o.id === this.currentItemId) : undefined;
+    return {
+      tradeOff: this.tradeOffText.text,
+      sendingLeft:
+        this.sendingUntil !== null ? Math.max(1, Math.ceil(this.sendingUntil - this.clockS)) : null,
+      receipt: item?.status !== 'sending' ? (item?.receipt ?? null) : null,
+      conflict: this.conflict,
+    };
+  }
+
+  private renderBoard(): void {
+    this.board.render(
+      {
+        plan: this.plan,
+        week: this.currentWeek(),
+        invite: this.inviteExtras(),
+        replanText: this.replanText,
+        fresh: this.fresh,
+      },
+      this.animateNext,
+    );
+    if (this.plan) this.animateNext = true;
+  }
+
   // ---------- asking the agent ----------
 
-  /** Chips, voice and test hooks all come through here. */
-  private async ask(text: string, heard = ''): Promise<void> {
+  /** Chips, voice, re-plan and test hooks all come through here. */
+  private async ask(text: string, heard = ''): Promise<AgentResult | null> {
     const id = ++this.requestId;
     this.busy = true;
     this.say(heard ? `${heard} · thinking…` : 'Thinking…', 'ai');
     const t0 = performance.now();
     let result: AgentResult;
     try {
-      result = await runAgent(calendar, text, this.plan, { url: this.agentUrl, fetch: this.fetchImpl });
+      result = await runAgent(this.cal, text, this.plan, { url: this.agentUrl, fetch: this.fetchImpl });
     } finally {
       if (id === this.requestId) this.busy = false;
     }
-    if (id !== this.requestId) return; // a newer request won
+    if (id !== this.requestId) return null; // a newer request won
     this.lastAskMs = performance.now() - t0;
     // Result first, then what was heard: the line is trimmed from the end when long,
-    // so the attribution must never be the part that gets cut (code review 14 Nov).
+    // so the attribution must never be the part that gets cut.
     const post = heard ? ` · ${heard}` : '';
     if (!result.plan) {
       this.say(heard ? `Not sure what you meant; try a chip · ${heard}` : 'Not sure what you meant', 'warn');
-      return;
+      return result;
     }
     this.setPlan(result.plan);
     playTick();
@@ -269,8 +428,8 @@ export class BoardSystem extends createSystem({
       // Short, calm wording: the rules double-checking the AI is a feature, not an error.
       const fixed = /did not fit/.test(result.note) ? 'rules corrected the time' : 'email from template';
       this.say(`Planned by AI · ${fixed}${post}`, 'ai');
-    }
-    else this.say(`${result.note ? `Rules · ${result.note.replace(/; rules planned this$/, '')}` : 'Planned by rules'}${post}`, 'warn');
+    } else this.say(`${result.note ? `Rules · ${result.note.replace(/; rules planned this$/, '')}` : 'Planned by rules'}${post}`, 'warn');
+    return result;
   }
 
   // ---------- pinches ----------
@@ -283,22 +442,32 @@ export class BoardSystem extends createSystem({
   private updateInteraction(delta: number): void {
     const live = this.board.object.visible;
 
-    // Chips and "Also free" rows, in the order they were pressed.
     for (const press of this.presses.splice(0)) {
+      this.pressCount++;
       if (!live) continue;
       this.controller.lock(); // the user is using the board: no more jumping
       if (press.kind === 'chip') {
         const chip = CHIPS[press.index];
         if (chip.id === 'mic') void this.voice.toggle();
         else if (!this.busy) void this.ask(chip.say);
-        continue;
-      }
-      const plan = this.plan;
-      const alt = plan?.alternatives[press.index];
-      if (plan && alt && !this.busy) {
-        this.setPlan(chooseSlot(calendar, plan, alt));
-        this.say('You picked this time', 'muted');
-        playTick();
+      } else if (press.kind === 'alt') {
+        const plan = this.plan;
+        const alt = plan?.alternatives[press.index];
+        if (plan && alt && !this.busy) {
+          this.animateNext = false; // your own pick: no need to replay the agent's sweep
+          this.setPlan(chooseSlot(this.cal, plan, alt));
+          this.say('You picked this time', 'muted');
+          playTick();
+        }
+      } else if (press.kind === 'replan') {
+        if (this.replanText === null || this.busy) continue;
+        if (press.index === 0) void this.replan();
+        else {
+          this.replanText = null;
+          this.say('Okay · the conflict stays flagged on the card', 'muted');
+        }
+      } else if (press.kind === 'invite' && this.sendingUntil !== null) {
+        this.unsend();
       }
     }
 
@@ -308,24 +477,100 @@ export class BoardSystem extends createSystem({
       this.hold.reset(); // the invite changed under the user's fingers
       this.holdPlanVersion = current.version;
     }
-    const canApprove = live && !this.busy && current?.invite != null && current.approval === 'needs';
-    if (this.inviteEntity.hasComponent(Pressed)) this.controller.lock();
-    const event = this.hold.update(delta, this.inviteEntity.hasComponent(Pressed), canApprove);
-    if (event === 'complete' && current) {
-      const result = approve(current, new Date().toISOString());
-      if (result) {
-        this.outbox = addToOutbox(this.outbox, result.item);
-        this.board.setOutbox(this.outbox);
-        this.setPlan(result.plan);
-        this.holdPlanVersion = result.plan.version;
-        this.board.celebrate();
-        this.say('Approved · in the demo outbox, nothing sent', 'ok');
-        playApproved();
-      }
-    }
+    const canApprove =
+      live && !this.busy && !this.board.sweeping && current?.invite != null && current.approval === 'needs';
+    const pressed = this.inviteHeld || this.inviteEntity.hasComponent(Pressed);
+    if (!this.board.desk.visible) this.inviteHeld = false;
+    if (pressed) this.controller.lock();
+    const event = this.hold.update(delta, pressed, canApprove);
+    if (event === 'complete' && current) this.approveNow(current);
     this.peakHold = Math.max(this.peakHold, this.hold.progress);
     this.board.setHold(this.hold.progress);
-    this.board.setHover(canApprove && this.inviteEntity.hasComponent(Hovered), this.hoveredIndex(this.altEntities));
+    this.board.setHover(
+      canApprove && this.inviteEntity.hasComponent(Hovered),
+      this.hoveredIndex(this.altEntities),
+      this.hoveredIndex(this.replanEntities),
+    );
+  }
+
+  private approveNow(current: Plan): void {
+    const result = approve(current, new Date().toISOString());
+    if (!result) return;
+    const item: OutboxItem = { ...result.item, status: 'sending' };
+    this.outbox = addToOutbox(this.outbox, item);
+    this.currentItemId = item.id;
+    this.sendingUntil = this.clockS + this.unsendSeconds;
+    this.conflict = null;
+    this.setPlan(result.plan);
+    this.holdPlanVersion = result.plan.version;
+    this.board.setOutbox(this.outbox);
+    this.board.celebrate();
+    this.say(`Approved · sending in ${UNSEND_SECONDS} s · pinch the card to Unsend`, 'ok');
+    playApproved();
+  }
+
+  /** Pull the invite back inside the Unsend window. */
+  private unsend(): void {
+    if (!this.plan || this.currentItemId === null) return;
+    this.outbox = removeFromOutbox(this.outbox, this.currentItemId);
+    this.currentItemId = null;
+    this.sendingUntil = null;
+    this.hold.requireRelease(); // the pinch that pressed Unsend must not start a new hold
+    this.setPlan(unapprove(this.plan));
+    this.board.setOutbox(this.outbox);
+    this.say('Unsent · nothing left · the invite needs your hold again', 'warn');
+    playTick();
+  }
+
+  private updateTimers(): void {
+    // Unsend window over: the invite lands in the demo outbox with its receipt.
+    if (this.sendingUntil !== null && this.clockS >= this.sendingUntil && this.plan && this.currentItemId) {
+      const week = this.currentWeek();
+      const receipt = buildReceipt(this.cal, this.plan, week?.ruledOut ?? 0, nowLabel());
+      this.outbox = this.outbox.map((o) => (o.id === this.currentItemId ? { ...o, status: 'sent' as const, receipt } : o));
+      this.sendingUntil = null;
+      this.board.setOutbox(this.outbox);
+      this.save();
+      this.say('In the demo outbox · nothing was really sent', 'ok');
+      playTick();
+      if (this.watchEnabled && !this.watchFired && this.watchAt === null) {
+        this.watchAt = this.clockS + WATCH_DELAY_SECONDS;
+      }
+    }
+    // The agent keeps watch: the sample change lands once.
+    if (this.watchAt !== null && this.clockS >= this.watchAt) {
+      this.watchAt = null;
+      this.fireWatch();
+    }
+  }
+
+  /** The labelled SAMPLE change lands on the approved time; the agent flags it. */
+  private fireWatch(): void {
+    const plan = this.plan;
+    if (this.watchFired || !plan?.slot || plan.approval !== 'approved') return;
+    this.watchFired = true;
+    const slot = plan.slot;
+    this.cal = withGuestBusy(this.cal, sampleChange(slot));
+    if (stillFree(this.cal, slot)) return;
+    this.fresh = new Set([...this.fresh, `${slot.day}T${slot.start}`]);
+    const when = shortWhen(slot.day, slot.start);
+    this.conflict = `Conflict: ${this.cal.guest.name} is now busy ${when}`;
+    this.replanText = `${this.cal.guest.name} just added a dentist visit (SAMPLE change) at ${when}. Your approved invite no longer fits.`;
+    this.say('Agent noticed a conflict · re-plan?', 'warn');
+    playTick();
+  }
+
+  /** Re-plan after a conflict: same rule, new time; always needs a fresh hold. */
+  private async replan(): Promise<void> {
+    this.replanText = null;
+    const before = this.plan?.slot;
+    const result = await this.ask(DEMO_TASK);
+    if (result?.plan?.slot) {
+      this.conflict = null;
+      const moved = shortWhen(result.plan.slot.day, result.plan.slot.start);
+      const from = before ? ` from ${shortWhen(before.day, before.start)}` : '';
+      this.say(`Re-planned${from} to ${moved} · needs your hold`, 'ai');
+    }
   }
 
   private drawChips(): void {
@@ -355,8 +600,14 @@ export class BoardSystem extends createSystem({
   // ---------- plan + saving ----------
 
   private setPlan(plan: Plan | null, save = true): void {
+    // Any change to an invite that is still in its Unsend window cancels the send.
+    if (this.sendingUntil !== null && this.currentItemId && plan?.approval !== 'approved') {
+      this.outbox = removeFromOutbox(this.outbox, this.currentItemId);
+      this.sendingUntil = null;
+      this.board?.setOutbox(this.outbox);
+    }
+    if (plan?.approval !== 'approved') this.currentItemId = null;
     this.plan = plan;
-    this.board.setPlan(plan);
     if (save) this.save();
   }
 
@@ -413,14 +664,28 @@ export class BoardSystem extends createSystem({
     } else if (p.kind === 'wall' && /No wall found/.test(this.agentLineText)) {
       this.say('', 'muted');
     }
+    // The desk decides: the invite card goes to the real table in front, or the lap.
+    this.placeDesk(chooseDesk(this.headPos, this.headFwd, this.lastPlanes));
+  }
+
+  private placeDesk(d: DeskPlacement): void {
+    this.deskPlace = d;
+    const desk = this.board.desk;
+    desk.position.set(d.position.x, d.position.y, d.position.z);
+    desk.rotation.set(-d.tilt, d.yaw, 0, 'YXZ');
   }
 
   private showDesktopPreview(): void {
     const cam = this.world.camera;
     cam.getWorldPosition(this.headPos);
     cam.getWorldDirection(this.headFwd); // cameras look down -Z; this already returns it
-    this.apply(fallbackPlacement(this.headPos, this.headFwd));
+    const p = fallbackPlacement(this.headPos, this.headFwd);
+    // Board a little left so the desk card can sit to its lower right, both in view.
+    this.apply({ ...p, position: { ...p.position, x: p.position.x - 0.22 } });
     this.board.setStatus('preview');
+    const pos = { x: this.headPos.x + 0.48, y: this.headPos.y - 0.26, z: this.headPos.z - 0.95 };
+    const back = { x: this.headPos.x - pos.x, z: this.headPos.z - pos.z };
+    this.placeDesk({ kind: 'lap', position: pos, yaw: Math.atan2(back.x, back.z), tilt: 0.2 });
   }
 
   // ---------- test hooks ----------
@@ -449,15 +714,17 @@ export class BoardSystem extends createSystem({
       },
       plan: () => (this.plan ? { ...this.plan, linked: isLinked(this.plan) } : null),
       cards: () =>
-        [this.board.slotCard, this.board.inviteCard].map((c) => ({
+        [this.board.mural, this.board.inviteCard].map((c) => ({
           name: c.mesh.name,
-          visible: c.mesh.visible && this.board.object.visible,
+          visible: c.mesh.visible && (c === this.board.inviteCard ? this.board.desk.visible : this.board.object.visible),
         })),
       targets: () => {
         const t: Record<string, number[]> = {
           invite: at(this.board.inviteCard.mesh),
           alt0: at(this.board.altRows[0].mesh),
           alt1: at(this.board.altRows[1].mesh),
+          'replan:yes': at(this.board.replanButtons[0].mesh),
+          'replan:no': at(this.board.replanButtons[1].mesh),
         };
         CHIPS.forEach((c, i) => (t[`chip:${c.id}`] = at(this.board.chipPanels[i].mesh)));
         return t;
@@ -467,13 +734,48 @@ export class BoardSystem extends createSystem({
         inviteHovered: this.inviteEntity.hasComponent(Hovered),
         invitePressed: this.inviteEntity.hasComponent(Pressed),
         altHovered: this.hoveredIndex(this.altEntities),
+        chipHovered: this.hoveredIndex(this.chipEntities),
+        presses: this.pressCount,
+        inviteHeld: this.inviteHeld,
+        boardVisible: this.board.object.visible,
         peakHold: this.peakHold,
         busy: this.busy,
         agentLine: this.agentLineText,
         lastAskMs: Math.round(this.lastAskMs),
       }),
       outbox: () => this.outbox,
-      heard: (text) => this.ask(text, `Heard: “${text}”`),
+      desk: () =>
+        this.deskPlace
+          ? {
+              kind: this.deskPlace.kind,
+              position: [this.deskPlace.position.x, this.deskPlace.position.y, this.deskPlace.position.z],
+              visible: this.board.desk.visible,
+            }
+          : null,
+      mural: () => ({
+        visible: this.board.mural.mesh.visible && this.board.object.visible,
+        sweeping: this.board.sweeping,
+        ruledOut: this.week?.ruledOut ?? 0,
+        fresh: this.fresh.size,
+      }),
+      flow: () => ({
+        sendingLeft: this.sendingUntil !== null ? Math.max(0, this.sendingUntil - this.clockS) : null,
+        conflict: this.conflict,
+        replan: this.replanText !== null,
+        watchFired: this.watchFired,
+        clock: this.clockS,
+      }),
+      watchNow: () => {
+        this.watchAt = null;
+        this.fireWatch();
+      },
+      setWatch: (on) => {
+        this.watchEnabled = on;
+        if (!on) this.watchAt = null;
+      },
+      heard: async (text) => {
+        await this.ask(text, `Heard: “${text}”`);
+      },
       fakeAi: (answer, delayMs = 0) => {
         if (answer === null) {
           this.agentUrl = AGENT_URL;
@@ -497,11 +799,22 @@ export class BoardSystem extends createSystem({
       setHoldSeconds: (seconds) => {
         this.hold = new HoldToApprove({ ...HOLD, seconds });
       },
+      setUnsendSeconds: (seconds) => {
+        this.unsendSeconds = seconds;
+      },
       resetDemo: () => {
         this.requestId++;
         this.busy = false;
         this.peakHold = 0;
         this.outbox = [];
+        this.cal = baseCalendar;
+        this.conflict = null;
+        this.replanText = null;
+        this.fresh = new Set();
+        this.sendingUntil = null;
+        this.currentItemId = null;
+        this.watchAt = null;
+        this.watchFired = false;
         this.setPlan(null, false);
         this.board.setOutbox([]);
         this.say('', 'muted');
@@ -511,3 +824,4 @@ export class BoardSystem extends createSystem({
     };
   }
 }
+

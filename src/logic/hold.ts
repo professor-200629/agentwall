@@ -63,6 +63,12 @@ export class HoldToApprove {
     return 'idle';
   }
 
+  /** Ignore the current pinch until it is released (e.g. the pinch that pressed Unsend). */
+  requireRelease(): void {
+    this.progress = 0;
+    this.waitForRelease = true;
+  }
+
   /** Drop any partial hold (e.g. the invite changed under the user's fingers). */
   reset(): void {
     this.progress = 0;

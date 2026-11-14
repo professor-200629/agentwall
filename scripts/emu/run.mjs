@@ -45,15 +45,22 @@ function aim(name) {
 }
 const pinchValue = (value) => xr('set-select-value', { device: 'hand-right', value });
 async function tap(name) {
+  const before = hook('interaction').presses;
   aim(name);
   await sleep(250);
+  const hov = hook('interaction');
   xr('select', { device: 'hand-right', duration: 0.2 });
   await sleep(400);
+  const after = hook('interaction');
+  if (after.presses === before) {
+    console.log(`      tap ${name}: NO PRESS (chipHover ${hov.chipHovered} altHover ${hov.altHovered} inviteHover ${hov.inviteHovered} held ${hov.inviteHeld} board ${hov.boardVisible} busy ${hov.busy})`);
+  }
 }
 async function waitIdle(ms = 6000) {
+  // Idle = the agent answered AND its sweep across the week has finished.
   const t0 = Date.now();
   while (Date.now() - t0 < ms) {
-    if (!hook('interaction').busy) return Date.now() - t0;
+    if (!hook('interaction').busy && !hook('mural').sweeping) return Date.now() - t0;
     await sleep(200);
   }
   return -1;
@@ -63,6 +70,7 @@ async function waitIdle(ms = 6000) {
 cli(['browser', 'reload']);
 await sleep(3000);
 hook('resetDemo');
+hook('setWatch', false);
 let b = hook('board');
 check('desktop: board visible as a preview before XR', hook('state') === 'idle' && b.visible, `pos=${fmt(b.position)}`);
 
@@ -241,6 +249,64 @@ it = hook('interaction');
 check('hold keeps going when the ray drifts off the invite mid-hold', hook('plan').approval === 'approved', `approval=${hook('plan').approval} peak=${it.peakHold.toFixed(2)}`);
 pinchValue(0);
 hook('setHoldSeconds', 1);
+
+// ---------- 11. Unsend and the receipt ----------
+hook('setUnsendSeconds', 15); // emulator commands take ~1 s each
+look(0);
+hook('restart');
+await sleep(1500);
+hook('setWatch', false);
+hook('resetDemo');
+await tap('chip:task');
+await waitIdle();
+check('mural visible after the agent sweeps the week', hook('mural').visible && !hook('mural').sweeping && hook('mural').ruledOut > 0, JSON.stringify(hook('mural')));
+const desk1 = hook('desk');
+check('invite card placed on a table or above the lap, visible', !!desk1 && desk1.visible && ['desk', 'lap'].includes(desk1.kind), JSON.stringify(desk1));
+aim('invite');
+await sleep(300);
+pinchValue(1);
+await sleep(1800);
+pinchValue(0);
+await sleep(300);
+let fl = hook('flow');
+box = hook('outbox');
+check('hold approves into a 5-second Unsend window', hook('plan').approval === 'approved' && box.length === 1 && box[0].status === 'sending' && fl.sendingLeft > 0, `status=${box[0]?.status} left=${fl.sendingLeft?.toFixed(1)}`);
+// The hand still points at the card: pinch again at once (a full tap() costs ~7 s of commands).
+xr('select', { device: 'hand-right', duration: 0.2 });
+await sleep(400);
+box = hook('outbox');
+check('pinching the card in the window Unsends it', hook('plan').approval === 'needs' && box.length === 0 && /Unsent/.test(hook('interaction').agentLine), hook('interaction').agentLine);
+await sleep(1200);
+aim('invite');
+await sleep(300);
+pinchValue(1);
+await sleep(1800);
+pinchValue(0);
+await sleep(16000);
+box = hook('outbox');
+check('after 5 s it is sent to the demo outbox with a RULES/AI/YOU receipt', box.length === 1 && box[0].status === 'sent' && box[0].receipt?.length === 5 && hook('flow').sendingLeft === null, JSON.stringify(box[0]?.receipt?.map((r) => r.tag)));
+
+hook('setUnsendSeconds', 5);
+// ---------- 12. The agent keeps watch ----------
+const approvedSlot = hook('plan').slot.id;
+hook('watchNow');
+await sleep(500);
+fl = hook('flow');
+check('a SAMPLE change lands on the approved time and the agent flags it', fl.conflict && fl.replan && hook('mural').fresh === 1, JSON.stringify(fl));
+await tap('replan:yes');
+await waitIdle();
+plan = hook('plan');
+check('Re-plan moves the invite to a new time and needs a fresh hold', plan.slot.id !== approvedSlot && plan.approval === 'needs' && hook('flow').conflict === null && /Re-planned/.test(hook('interaction').agentLine), `${approvedSlot} -> ${plan.slot.id} | ${hook('interaction').agentLine}`);
+
+// ---------- 13. The desk: real table vs lap ----------
+xr('set-transform', { device: 'headset', position: { x: -0.75, y: 1.15, z: 0.2 }, orientation: { pitch: 0, yaw: 90, roll: 0 } });
+hook('restart');
+await sleep(2000);
+check('seated at a real table: the invite goes on the table', hook('desk')?.kind === 'desk', JSON.stringify(hook('desk')));
+look(0);
+hook('restart');
+await sleep(2000);
+check('no table within reach: the invite comes above the lap', hook('desk')?.kind === 'lap', JSON.stringify(hook('desk')));
 
 look(0, -10);
 console.log(`\n${results.filter(Boolean).length}/${results.length} passed`);
