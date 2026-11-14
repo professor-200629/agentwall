@@ -41,7 +41,7 @@ import { VoiceInput } from './voice.js';
 const calendar = calendarJson as CalendarData;
 /** The Worker URL is set at build time (GitHub Actions variable). Empty = rules only. */
 const AGENT_URL: string = String(import.meta.env.VITE_AGENT_URL ?? '').trim();
-const MODEL_LABEL = 'Llama 3.1 on Groq';
+const MODEL_LABEL = 'Groq';
 /** Each chip's rule, parsed once (not every frame). */
 const CHIP_RULES = CHIPS.map((c) => parseRequest(c.say, calendar).rule);
 

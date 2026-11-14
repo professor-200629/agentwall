@@ -6,7 +6,7 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-11-01",
   "vars": {
-    "MODEL": "llama-3.1-8b-instant",
+    "MODEL": "qwen/qwen3.8-27b",
     "ALLOWED_ORIGINS": "https://professor-200629.github.io,https://localhost:8081"
   }
 }

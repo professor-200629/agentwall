@@ -131,7 +131,10 @@ export function bodyMatchesSlot(body: string, slot: Slot, cal: CalendarData): bo
     const range = new RegExp(String.raw`${at}\s*(?:–|—|-|to)\s*\d{1,2}(?::\d{2})?\s*${mer}`);
     return single.test(lower) || range.test(lower);
   });
-  return dayOk && timeOk && lower.includes(cal.guest.name.toLowerCase());
+  // The exact 24-hour start ("17:30") is also unambiguous.
+  const h24 = `${String(Math.floor(slot.start / 60)).padStart(2, '0')}:${String(slot.start % 60).padStart(2, '0')}`;
+  const timeOk24 = new RegExp(String.raw`(?<![\d:])${h24}(?![\d])`).test(lower);
+  return dayOk && (timeOk || timeOk24) && lower.includes(cal.guest.name.toLowerCase());
 }
 
 /** Rules-only path: chips, voice transcripts, and the fallback. */

@@ -89,7 +89,7 @@ npx iwsdk dev down
 
 The AI has one narrow job: turn what you said ("only after 4 PM") plus the
 sample calendar into a slot choice and an email. It runs on Groq
-(`llama-3.1-8b-instant`) behind a small Cloudflare Worker (`worker/`), so the
+(`qwen/qwen3.8-27b`, strict JSON schema) behind a small Cloudflare Worker (`worker/`), so the
 API key never ships in the app.
 
 - The app sends the AI only the free slots the scheduler computed; the AI must

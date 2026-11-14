@@ -11,6 +11,7 @@
  */
 import {
   buildMessages,
+  chatBody,
   corsFor,
   DEFAULT_MODEL,
   DEFAULT_ORIGINS,
@@ -47,18 +48,31 @@ async function plan(req: Request, env: Env, cors: Record<string, string>): Promi
   const payload = validatePayload(raw);
   if (typeof payload === 'string') return json({ error: payload }, 400, cors);
 
-  const upstream = await fetch(`${GROQ_BASE}/chat/completions`, {
-    method: 'POST',
-    headers: { authorization: `Bearer ${env.GROQ_API_KEY}`, 'content-type': 'application/json' },
-    body: JSON.stringify({
-      model: env.MODEL || DEFAULT_MODEL,
-      messages: buildMessages(payload),
-      response_format: { type: 'json_object' },
-      temperature: 0.2,
-      max_tokens: 450,
-    }),
-  });
-  if (!upstream.ok) return json({ error: `groq ${upstream.status}` }, 502, cors);
+  const model = env.MODEL || DEFAULT_MODEL;
+  const messages = buildMessages(payload);
+  const call = (body: Record<string, unknown>) =>
+    fetch(`${GROQ_BASE}/chat/completions`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${env.GROQ_API_KEY}`, 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  const strictBody = chatBody(model, messages);
+  let upstream = await call(strictBody);
+  // Strict schema mode occasionally fails validation on Groq (400 json_validate_failed).
+  // Retry once in plain JSON mode; the app checks the answer either way.
+  if (upstream.status === 400 && (strictBody.response_format as { type: string }).type === 'json_schema') {
+    upstream = await call({ ...strictBody, response_format: { type: 'json_object' } });
+  }
+  if (!upstream.ok) {
+    // Pass on Groq's error code only (e.g. json_validate_failed, rate_limit_exceeded), never its message.
+    let code = '';
+    try {
+      code = ((await upstream.json()) as { error?: { code?: string } }).error?.code ?? '';
+    } catch {
+      // not JSON
+    }
+    return json({ error: `groq ${upstream.status}${code ? ` ${code.replace(/[^a-z_]/gi, '').slice(0, 40)}` : ''}` }, 502, cors);
+  }
   const data = (await upstream.json()) as { choices?: Array<{ message?: { content?: string } }> };
   const answer = parseModelJson(data.choices?.[0]?.message?.content ?? '');
   if (!answer) return json({ error: 'model returned no JSON' }, 502, cors);

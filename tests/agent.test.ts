@@ -154,6 +154,10 @@ describe('checking the AI answer', () => {
     expect(bodyMatchesSlot('Hi Sam, Thursday 4pm? Balu', slot, cal)).toBe(true);
     expect(bodyMatchesSlot('Hi Sam, Thursday 14:00 – 4:30 PM? Balu', slot, cal)).toBe(false);
     expect(bodyMatchesSlot('Hi Sam, Thursday 4:00 AM? Balu', slot, cal)).toBe(false);
+    // 24-hour form, as a real model wrote it on 14 Nov.
+    expect(bodyMatchesSlot('Hi Sam, on Thursday, 19 November, from 16:00 to 16:30 IST. Best, Balu', slot, cal)).toBe(true);
+    expect(bodyMatchesSlot('Hi Sam, on Thursday from 116:00? Balu', slot, cal)).toBe(false);
+    expect(bodyMatchesSlot('Hi Sam, on Thursday from 16:005? Balu', slot, cal)).toBe(false);
   });
 
   it('rejects emails with links or that are far too long', () => {
