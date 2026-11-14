@@ -15,6 +15,15 @@
       }
       #intro[hidden] { display: none; }
       #intro h1 { margin: 0 0 6px; font-size: 22px; }
+      #intro ol { margin: 0 0 14px; padding-left: 20px; font-size: 14px; line-height: 1.45; color: #b6c2cf; }
+      #intro li { margin-bottom: 4px; }
+      #hide-intro, #show-intro {
+        font: inherit; font-size: 13px; padding: 6px 12px; border-radius: 8px; cursor: pointer;
+        border: 1px solid #30363d; background: #161b22; color: #e6edf3;
+      }
+      #hide-intro { position: absolute; top: 12px; right: 12px; }
+      #show-intro { position: fixed; left: 16px; bottom: 16px; z-index: 10; }
+      #show-intro[hidden] { display: none; }
       #intro p { margin: 0 0 14px; font-size: 15px; line-height: 1.45; color: #b6c2cf; }
       #enter-xr {
         font: inherit; font-size: 17px; font-weight: 600; padding: 12px 20px; border: 0;
@@ -27,11 +36,18 @@
   <body>
     <div id="scene-container"></div>
     <div id="intro">
+      <button id="hide-intro" type="button" aria-label="Hide this box">Hide</button>
       <h1>Agent Wall</h1>
       <p>An AI agent plans one task on a board on your real wall. Nothing goes out until you pinch and hold to approve.</p>
+      <ol>
+        <li><b>Ask:</b> point at a chip and pinch (thumb + index finger), or pinch 🎤 Speak.</li>
+        <li><b>Change:</b> pinch “Only after 4 PM”, or an “Also free” time. The invite rewrites itself.</li>
+        <li><b>Approve:</b> pinch and hold the invite for 1 second. It goes to a demo outbox. Nothing is really sent.</li>
+      </ol>
       <button id="enter-xr" type="button">Enter mixed reality</button>
       <p id="xr-note"></p>
     </div>
+    <button id="show-intro" type="button" hidden>How it works</button>
     <script type="module" src="/src/index.ts"></script>
   </body>
 </html>

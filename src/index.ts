@@ -14,17 +14,16 @@ World.create(
   const enter = document.getElementById('enter-xr') as HTMLButtonElement;
   const note = document.getElementById('xr-note') as HTMLParagraphElement;
 
-  if (!world.xrEnabled || !navigator.xr) {
+  // No mixed reality here: explain, and say the mouse works like a pinch.
+  const noXr = (why: string) => {
     enter.disabled = true;
-    note.textContent =
-      'This browser has no WebXR. Open this page in the Meta Quest Browser to place the board on your wall.';
+    note.textContent = `${why} On this screen you can still try it: click a chip, and hold the mouse on the invite for 1 second.`;
+  };
+  if (!world.xrEnabled || !navigator.xr) {
+    noXr('This browser has no WebXR. Open this page in the Meta Quest Browser to put the board on your wall.');
   } else {
     navigator.xr.isSessionSupported('immersive-ar').then((ok) => {
-      if (!ok) {
-        enter.disabled = true;
-        note.textContent =
-          'Mixed reality is not supported here. Open this page in the Meta Quest Browser.';
-      }
+      if (!ok) noXr('Mixed reality is not supported here. Open this page in the Meta Quest Browser.');
     });
   }
   // Desktop preview: the first click anywhere also allows sound.
@@ -33,7 +32,24 @@ World.create(
     unlockAudio(); // browsers allow sound only after a click
     world.launchXR();
   });
+
+  // Hide / show the help box so it doesn't cover the board on small screens.
+  const hideBtn = document.getElementById('hide-intro') as HTMLButtonElement;
+  const showBtn = document.getElementById('show-intro') as HTMLButtonElement;
+  let userHid = false;
+  hideBtn.addEventListener('click', () => {
+    userHid = true;
+    intro.hidden = true;
+    showBtn.hidden = false;
+  });
+  showBtn.addEventListener('click', () => {
+    userHid = false;
+    intro.hidden = false;
+    showBtn.hidden = true;
+  });
   world.visibilityState.subscribe((v) => {
-    intro.hidden = v !== VisibilityState.NonImmersive;
+    const flat = v === VisibilityState.NonImmersive;
+    intro.hidden = !flat || userHid;
+    showBtn.hidden = !flat || !userHid;
   });
 });

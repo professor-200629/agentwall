@@ -6,6 +6,7 @@
  */
 
 import { iwsdkDev } from '@iwsdk/vite-plugin-dev';
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
 
 export default defineConfig({
@@ -22,6 +23,13 @@ export default defineConfig({
   // (three@0.185 vs app super-three@0.181). Duplicate Component classes break
   // instanceof checks → "Only pmndrs/uikit components can be added as children".
   resolve: {
+    // Only the two icons the UI kit needs, not the 4.1 MB icon set (see src/stubs).
+    alias: [
+      {
+        find: /^@pmndrs\/uikit-lucide$/,
+        replacement: fileURLToPath(new URL('./src/stubs/uikit-lucide-lite.ts', import.meta.url)),
+      },
+    ],
     dedupe: [
       'three',
       '@pmndrs/uikit',
@@ -35,7 +43,6 @@ export default defineConfig({
       'three',
       '@pmndrs/uikit',
       '@pmndrs/uikit-horizon',
-      '@pmndrs/uikit-lucide',
       '@drawcall/uikitml',
     ],
     esbuildOptions: { target: 'esnext' },

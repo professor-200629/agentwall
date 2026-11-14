@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   BOARD,
+  boardScaleFor,
   chooseWall,
   fallbackPlacement,
   flatForward,
@@ -97,15 +98,16 @@ describe('chooseWall', () => {
   it('keeps the whole board on the wall near its edge', () => {
     const p = chooseWall({ x: 1.9, y: 1.2, z: 0 }, lookAhead, [frontWall()]);
     expect(p).not.toBeNull();
-    expect(p!.position.x).toBeCloseTo(2 - BOARD.width / 2);
+    // Wall 2 m away -> board scaled by boardScaleFor(2).
+    expect(p!.position.x).toBeCloseTo(2 - (BOARD.width * boardScaleFor(2)) / 2);
   });
 
   it('lowers the board to fit a short wall', () => {
-    // 1.0 m tall wall from the floor up.
-    const low = frontWall({ position: { x: 0, y: 0.5, z: -2 }, polygon: rect(2, 0.5) });
+    // 1.2 m tall wall from the floor up, 2 m away.
+    const low = frontWall({ position: { x: 0, y: 0.6, z: -2 }, polygon: rect(2, 0.6) });
     const p = chooseWall({ x: 0, y: 1.6, z: 0 }, lookAhead, [low]);
     expect(p).not.toBeNull();
-    expect(p!.position.y).toBeCloseTo(1.0 - BOARD.height / 2);
+    expect(p!.position.y).toBeCloseTo(1.2 - (BOARD.height * boardScaleFor(2)) / 2);
   });
 
   it('prefers the wall the user is looking at over a side wall', () => {
@@ -126,6 +128,33 @@ describe('chooseWall', () => {
     const lookSlightlyRight = { x: 0.3, y: 0, z: -1 };
     const p = chooseWall(seatedHead, lookSlightlyRight, [frontWall()]);
     expect(p!.position.x).toBeCloseTo(0.6); // 2 m * 0.3
+  });
+});
+
+describe('board size for distance', () => {
+  it('stays 1x up close and grows to at most 1.4x on far walls', () => {
+    expect(boardScaleFor(1.2)).toBe(1);
+    expect(boardScaleFor(1.8)).toBe(1);
+    expect(boardScaleFor(2.16)).toBeCloseTo(1.2);
+    expect(boardScaleFor(4)).toBe(1.4);
+  });
+
+  it('a far wall gets a bigger board that still fits inside the wall', () => {
+    const far = frontWall({ position: { x: 0, y: 1.25, z: -3 }, polygon: rect(1.5, 1.25) }); // 3 m wide
+    const p = chooseWall(seatedHead, lookAhead, [far])!;
+    expect(p.scale).toBeCloseTo(1.4);
+    // 1.68 m wide board on a 3 m wall: centre within +-(1.5 - 0.84).
+    expect(Math.abs(p.position.x)).toBeLessThanOrEqual(1.5 - (BOARD.width * 1.4) / 2 + 1e-9);
+  });
+
+  it('the bigger board must still fit: a narrow far wall is rejected', () => {
+    // 1.3 m wide wall at 3 m: fits a 1.2 m board, but not 80% of the 1.68 m one.
+    const narrow = frontWall({ position: { x: 0, y: 1.25, z: -3 }, polygon: rect(0.65, 1.25) });
+    expect(chooseWall(seatedHead, lookAhead, [narrow])).toBeNull();
+  });
+
+  it('the fallback board is 1x', () => {
+    expect(fallbackPlacement(seatedHead, lookAhead).scale).toBe(1);
   });
 });
 

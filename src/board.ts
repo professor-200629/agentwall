@@ -302,10 +302,15 @@ export class Board {
         roundRect(c, 44, top, W - 88, bottom - top, 24);
         c.stroke();
         c.setLineDash([]);
-        font(c, 28);
-        c.fillStyle = COLORS.faint;
+        const mid = (top + bottom) / 2;
+        font(c, 32, 600);
+        c.fillStyle = COLORS.text;
         const hint = 'Pinch “Find time + draft invite” to start';
-        c.fillText(hint, (W - c.measureText(hint).width) / 2, (top + bottom) / 2 + 10);
+        c.fillText(hint, (W - c.measureText(hint).width) / 2, mid - 8);
+        font(c, 26);
+        c.fillStyle = COLORS.muted;
+        const how = 'Point your hand at a chip, then tap your thumb and index finger together';
+        c.fillText(how, (W - c.measureText(how).width) / 2, mid + 36);
         return;
       }
 

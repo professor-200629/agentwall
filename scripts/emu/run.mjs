@@ -207,6 +207,25 @@ check('after reload: "Welcome back" shown', /Welcome back/.test(hook('interactio
 await enterXr();
 check('after reload: board placed again with the saved cards', hook('board').visible && hook('cards').every((c) => c.visible));
 
+// ---------- 8. Leave mixed reality and come back ----------
+const keep = hook('plan').slot.id;
+xr('exit');
+await sleep(1500);
+b = hook('board');
+check('after exit: back to the desktop preview, same cards', hook('state') === 'idle' && b.visible && hook('plan')?.slot?.id === keep, `state=${hook('state')}`);
+await enterXr();
+check('after re-entering: board finds the wall again, same cards', hook('state') === 'wall' && hook('plan')?.slot?.id === keep, `state=${hook('state')} slot=${hook('plan')?.slot?.id} planes=${hook('planes').length}`);
+check('re-entered board is scaled for the far wall', hook('placement')?.scale > 1, `scale=${hook('placement')?.scale?.toFixed(2)}`);
+
+// ---------- 9. No wall: Space Setup tip ----------
+hook('simulateNoPlanes', true);
+hook('restart');
+await sleep(3500);
+check('no wall: board floats and suggests Space Setup', hook('state') === 'fallback' && /Space Setup/.test(hook('interaction').agentLine), hook('interaction').agentLine);
+hook('simulateNoPlanes', false);
+await sleep(1500);
+check('wall appears: tip goes away', hook('state') === 'wall' && !/Space Setup/.test(hook('interaction').agentLine), hook('interaction').agentLine);
+
 look(0, -10);
 console.log(`\n${results.filter(Boolean).length}/${results.length} passed`);
 process.exit(results.every(Boolean) ? 0 : 1);

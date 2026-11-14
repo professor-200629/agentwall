@@ -382,8 +382,14 @@ export class BoardSystem extends createSystem({
     const o = this.board.object;
     o.position.set(p.position.x, p.position.y, p.position.z);
     o.rotation.set(0, p.yaw, 0);
+    o.scale.setScalar(p.scale);
     o.visible = true;
     this.board.setStatus(p.kind);
+    if (p.kind === 'fallback' && this.world.visibilityState.value !== VisibilityState.NonImmersive) {
+      this.say('No wall found · run Space Setup in Quest settings to pin the board to a wall', 'warn');
+    } else if (p.kind === 'wall' && /No wall found/.test(this.agentLineText)) {
+      this.say('', 'muted');
+    }
   }
 
   private showDesktopPreview(): void {

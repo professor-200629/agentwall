@@ -6,7 +6,9 @@ and nothing goes out until you pinch and hold to approve.
 Entry for the Meta VR Start Developer Competition 2026 (Productivity track).
 Built with Meta's [Immersive Web SDK](https://iwsdk.dev) (WebXR), hands only.
 
-**Status: Day 4, feature freeze.**
+**Status: Day 5.** Feature-frozen; real AI connected; not yet tested on a real
+Quest. **Have a Quest? Please try the 10-step checklist:
+[docs/TESTING-ON-QUEST.md](docs/TESTING-ON-QUEST.md).**
 
 1. The app finds a wall and puts the board on it (or floats it 1.2 m in front
    of you if there is no wall).
@@ -114,6 +116,16 @@ API key never ships in the app.
    then `gh workflow run "Test and deploy to GitHub Pages"`.
 
 Without the Worker the app runs in rules mode, and the board says so.
+
+## Performance notes
+
+- Download: the main script is 2.4 MB (0.66 MB gzipped). IWSDK's UI kit pulls in
+  a 4.1 MB icon set we never use; `vite.config.ts` swaps it for the two icons
+  the kit needs (`src/stubs/uikit-lucide-lite.ts`).
+- One draw call and one texture per panel; panels redraw only when their
+  content changes. Desktop emulator: 16.7 ms frames (60 fps), no allocations
+  in the frame loop. Not yet measured on a Quest.
+- Far walls get a bigger board (up to 1.4x) so text stays readable.
 
 ## License
 

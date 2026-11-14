@@ -44,7 +44,17 @@ export interface Placement {
   yaw: number;
   /** Distance from the head to the board centre, metres. */
   distance: number;
+  /** Uniform scale for the board (1 = BOARD size). Far walls get a bigger board. */
+  scale: number;
   planeId?: number;
+}
+
+/**
+ * Bigger board on far walls so text stays readable: 1x up to 1.8 m away,
+ * growing with distance, at most 1.4x (a 1.68 m wide board at 2.5 m+).
+ */
+export function boardScaleFor(distance: number): number {
+  return Math.min(1.4, Math.max(1, distance / 1.8));
 }
 
 export const BOARD: BoardSize = { width: 1.2, height: 0.94 };
@@ -135,6 +145,9 @@ export function placeOnWall(
   if (dot(n, sub(head, plane.position)) < 0) n = scale(n, -1);
 
   const dist = dot(sub(head, plane.position), n);
+  // Size the board for this distance before checking that it fits on the wall.
+  const boardScale = boardScaleFor(dist);
+  board = { width: board.width * boardScale, height: board.height * boardScale };
   if (dist < PLACEMENT.minWallDistance || dist > PLACEMENT.maxWallDistance) return null;
 
   // Wall extent along its horizontal tangent (u) and world height (v).
@@ -183,6 +196,7 @@ export function placeOnWall(
     position,
     yaw: yawFacing(n),
     distance,
+    scale: boardScale,
     planeId: plane.id,
     angleDeg: angle,
     // Prefer the wall straight ahead, then the nearer one.
@@ -214,5 +228,6 @@ export function fallbackPlacement(head: V3, forward: V3): Placement {
     position: { x: head.x + f.x * d, y: head.y, z: head.z + f.z * d },
     yaw: yawFacing(scale(f, -1)),
     distance: d,
+    scale: 1,
   };
 }
