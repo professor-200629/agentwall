@@ -178,6 +178,15 @@ describe('checking the AI answer', () => {
     expect(a.slotId).toBeNull();
   });
 
+  it('sends only free times that already fit the current rule, except for "any time"', () => {
+    const after4 = planWithRules(cal, 'only after 4 PM', makePlan(cal)).plan!;
+    const ids = buildPayload(cal, 'not Wednesday', after4).candidates.map((c) => c.id);
+    expect(ids.every((id) => Number(id.slice(11, 13)) >= 16)).toBe(true);
+    expect(ids).toContain('2026-11-18T17:30');
+    const all = buildPayload(cal, 'any time', after4).candidates.map((c) => c.id);
+    expect(all).toContain('2026-11-17T13:00');
+  });
+
   it('sends the AI only free slots and the facts it needs', () => {
     const p = buildPayload(cal, 'only after 4 PM', start);
     expect(p.candidates.length).toBeGreaterThan(5);

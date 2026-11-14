@@ -39,7 +39,7 @@ export interface AgentPayload {
   meetingMinutes: number;
   currentRule: string;
   days: Array<{ date: string; weekday: string }>;
-  /** Every free slot this week (no rule applied); the AI must pick one of these ids. */
+  /** Free slots that fit the current rule (all of them for "any time"); the AI must pick one. */
   candidates: Array<{ id: string; label: string }>;
 }
 
@@ -70,7 +70,12 @@ export function buildPayload(cal: CalendarData, request: string, current: Plan |
     meetingMinutes: cal.meeting.minutes,
     currentRule: current?.constraintText ?? '',
     days: cal.days.map((d) => ({ date: d, weekday: dayLabel(d).weekday })),
-    candidates: freeSlots(cal).map((s) => ({ id: s.id, label: slotLabel(s, cal.timezone) })),
+    // Free times that already fit the current rule, so the AI only has to apply the new
+    // request. "Any time" (clear) gets the whole week. Tested live 14 Nov: with the full
+    // list the model sometimes forgot the current rule.
+    candidates: freeSlots(cal, parseRequest(request, cal).intent === 'clear' ? {} : (current?.constraint ?? {})).map(
+      (s) => ({ id: s.id, label: slotLabel(s, cal.timezone) }),
+    ),
   };
 }
 

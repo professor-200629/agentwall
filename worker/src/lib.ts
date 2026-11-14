@@ -119,7 +119,7 @@ export function buildMessages(p: PlanPayload): Array<{ role: 'system' | 'user'; 
   const lines = [
     `TODAY: ${p.today} ${p.timezone}. OWNER: ${p.owner}. GUEST: ${p.guest}. LENGTH: ${p.meetingMinutes} min.`,
     `CURRENT RULE: ${p.currentRule || 'none'}`,
-    'FREE TIMES (start times, both people free, no rule applied):',
+    'FREE TIMES (start times, both people free, already within CURRENT RULE):',
     ...p.days.map((d) => `${weekday.get(d.date)} ${d.date}: ${(byDay.get(d.date) ?? []).join(', ') || 'none'}`),
     `USER REQUEST: """${p.request.replace(/"""/g, '"')}"""`,
   ];

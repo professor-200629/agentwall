@@ -245,7 +245,11 @@ export class BoardSystem extends createSystem({
     this.setPlan(result.plan);
     playTick();
     if (result.by === 'ai' && !result.note) this.say(`${pre}Planned by AI · ${MODEL_LABEL}`, 'ai');
-    else if (result.by === 'ai') this.say(`${pre}AI planned · ${result.note}`, 'warn');
+    else if (result.by === 'ai') {
+      // Short, calm wording: the rules double-checking the AI is a feature, not an error.
+      const fixed = /did not fit/.test(result.note) ? 'rules corrected the time' : 'email from template';
+      this.say(`${pre}Planned by AI · ${fixed}`, 'ai');
+    }
     else this.say(`${pre}${result.note ? `Rules · ${result.note.replace(/; rules planned this$/, '')}` : 'Planned by rules'}`, 'warn');
   }
 
