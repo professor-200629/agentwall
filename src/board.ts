@@ -54,13 +54,15 @@ export const LAYOUT = (() => {
   // Chip row inside the header, left to right; widths fit each label.
   const measure = document.createElement('canvas').getContext('2d');
   let x = left;
-  const chipH = px(46);
+  const chipH = px(60); // 5.9 cm tall: easier to hit with a hand ray
   const chipY = H / 2 - px(182) - chipH / 2;
   const chips = CHIPS.map((chip) => {
     let w = 0.12;
     if (measure) {
       measure.font = `600 ${CHIP_FONT_PX}px system-ui, sans-serif`;
-      w = px(measure.measureText(chip.label).width + 40);
+      // The mic chip also shows "● Listening 5", so size it for the longest label.
+      const longest = chip.id === 'mic' ? '● Listening 5' : chip.label;
+      w = px(measure.measureText(longest).width + 40);
     }
     const r = { x: x + w / 2, y: chipY, w, h: chipH };
     x += w + px(10);

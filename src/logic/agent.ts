@@ -60,7 +60,29 @@ export interface AgentResult {
   note: string;
 }
 
+/**
+ * When the rule parser understands the request (every preset chip and most short
+ * phrases), the rule is decided here, deterministically. The AI then only picks a
+ * time inside it and writes the email. Returns null for sentences the rules can't read.
+ * (Code review 14 Nov: the AI must never be able to veto or change a chip's rule.)
+ */
+export function rulesUnderstood(
+  cal: CalendarData,
+  text: string,
+  current: Plan | null,
+): { intent: Exclude<Intent, 'unknown'>; constraint: Constraint } | null {
+  const parsed = parseRequest(text, cal);
+  if (parsed.intent === 'unknown') return null;
+  const constraint =
+    parsed.intent === 'clear' ? {} : mergeConstraint(current?.constraint ?? {}, parsed.rule);
+  return { intent: parsed.intent, constraint };
+}
+
 export function buildPayload(cal: CalendarData, request: string, current: Plan | null): AgentPayload {
+  const known = rulesUnderstood(cal, request, current);
+  // Known request: only times inside the final rule. Unknown: times inside the current rule
+  // (live test 14 Nov: with the whole week listed the model sometimes forgot the rule).
+  const within = known ? known.constraint : (current?.constraint ?? {});
   return {
     request: request.slice(0, 300),
     today: `${dayLabel(cal.now.split('T')[0]).long}, ${clock(hm(cal.now.split('T')[1]))}`,
@@ -68,14 +90,9 @@ export function buildPayload(cal: CalendarData, request: string, current: Plan |
     owner: cal.owner.name,
     guest: `${cal.guest.name} (${cal.guest.role ?? 'guest'})`,
     meetingMinutes: cal.meeting.minutes,
-    currentRule: current?.constraintText ?? '',
+    currentRule: known ? ruleText(known.constraint) : (current?.constraintText ?? ''),
     days: cal.days.map((d) => ({ date: d, weekday: dayLabel(d).weekday })),
-    // Free times that already fit the current rule, so the AI only has to apply the new
-    // request. "Any time" (clear) gets the whole week. Tested live 14 Nov: with the full
-    // list the model sometimes forgot the current rule.
-    candidates: freeSlots(cal, parseRequest(request, cal).intent === 'clear' ? {} : (current?.constraint ?? {})).map(
-      (s) => ({ id: s.id, label: slotLabel(s, cal.timezone) }),
-    ),
+    candidates: freeSlots(cal, within).map((s) => ({ id: s.id, label: slotLabel(s, cal.timezone) })),
   };
 }
 
@@ -158,10 +175,21 @@ export function planWithRules(
 }
 
 /** Build the plan from a checked AI answer; rules fill any part that fails the checks. */
-export function planFromAi(cal: CalendarData, answer: AiAnswer, current: Plan | null): AgentResult {
-  if (answer.intent === 'unknown') return { plan: null, by: 'ai', note: 'Not sure what you meant.' };
-  const constraint =
-    answer.intent === 'clear' ? {} : mergeConstraint(current?.constraint ?? {}, ruleFrom(answer));
+export function planFromAi(
+  cal: CalendarData,
+  answer: AiAnswer,
+  current: Plan | null,
+  text = '',
+): AgentResult {
+  // The rule comes from the rules whenever they understand the words; the AI's own
+  // reading of the rule is used only for sentences the rules can't read.
+  const known = text ? rulesUnderstood(cal, text, current) : null;
+  if (!known && answer.intent === 'unknown') return { plan: null, by: 'ai', note: 'Not sure what you meant.' };
+  const constraint = known
+    ? known.constraint
+    : answer.intent === 'clear'
+      ? {}
+      : mergeConstraint(current?.constraint ?? {}, ruleFrom(answer));
   const allowed = freeSlots(cal, constraint);
   const aiSlot = allowed.find((s) => s.id === answer.slotId);
   const slot = aiSlot ?? allowed[0];
@@ -201,10 +229,13 @@ export async function runAgent(
       body: JSON.stringify(buildPayload(cal, text, current)),
       signal: controller.signal,
     });
-    if (!res.ok) return planWithRules(cal, text, current, `AI error ${res.status}; rules planned this`);
+    if (!res.ok) {
+      const why = res.status === 429 || res.status === 502 ? 'AI busy' : `AI error ${res.status}`;
+      return planWithRules(cal, text, current, `${why}; rules planned this`);
+    }
     const answer = readAiAnswer(await res.json(), cal);
     if (!answer) return planWithRules(cal, text, current, 'AI answer unreadable; rules planned this');
-    return planFromAi(cal, answer, current);
+    return planFromAi(cal, answer, current, text);
   } catch (e) {
     const slow = (e as Error)?.name === 'AbortError';
     return planWithRules(cal, text, current, slow ? 'AI too slow (>3 s); rules planned this' : 'AI offline; rules planned this');

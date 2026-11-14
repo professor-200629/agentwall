@@ -10,7 +10,7 @@
 export const MAX_RECORD_MS = 5000;
 const TRANSCRIBE_TIMEOUT_MS = 8000;
 
-export type VoiceState = 'idle' | 'listening' | 'transcribing';
+export type VoiceState = 'idle' | 'starting' | 'listening' | 'transcribing';
 
 export class VoiceInput {
   state: VoiceState = 'idle';
@@ -63,14 +63,27 @@ export class VoiceInput {
       this.onError(this.unavailableReason);
       return;
     }
+    // 'starting' while the browser's mic prompt is open, so a second pinch is ignored
+    // instead of opening a second microphone stream (code review 14 Nov).
+    this.state = 'starting';
+    this.onChange();
     try {
       this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch {
+      this.reset();
       this.onError('Microphone blocked; use the chips');
       return;
     }
     const type = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'].find((t) => MediaRecorder.isTypeSupported(t));
-    this.recorder = new MediaRecorder(this.stream, type ? { mimeType: type } : undefined);
+    try {
+      this.recorder = new MediaRecorder(this.stream, type ? { mimeType: type } : undefined);
+    } catch {
+      this.stream.getTracks().forEach((t) => t.stop());
+      this.stream = null;
+      this.reset();
+      this.onError('This browser cannot record audio; use the chips');
+      return;
+    }
     this.chunks = [];
     this.recorder.ondataavailable = (e) => {
       if (e.data.size > 0) this.chunks.push(e.data);

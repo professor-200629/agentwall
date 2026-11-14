@@ -85,6 +85,11 @@ describe('chooseWall', () => {
     expect(chooseWall(seatedHead, lookAhead, [frontWall({ polygon: rect(0.3, 1.25) })])).toBeNull();
   });
 
+  it('ignores a wall so close the board would fill the view', () => {
+    const near = frontWall({ position: { x: 0, y: 1.25, z: -0.6 } });
+    expect(chooseWall(seatedHead, lookAhead, [near])).toBeNull();
+  });
+
   it('ignores a wall that is too far away', () => {
     const far = frontWall({ position: { x: 0, y: 1.25, z: -(PLACEMENT.maxWallDistance + 1) } });
     expect(chooseWall(seatedHead, lookAhead, [far])).toBeNull();
@@ -213,6 +218,18 @@ describe('PlacementController', () => {
     c.tick(3, seatedHead, lookAhead, []);
     expect(c.state).toBe('fallback');
     expect(c.tick(5, seatedHead, lookAhead, [frontWall()])!.kind).toBe('wall');
+  });
+
+  it('does not jump to a wall once the user has started using the floating board', () => {
+    const c = new PlacementController();
+    c.start(0);
+    c.tick(3, seatedHead, lookAhead, []);
+    expect(c.state).toBe('fallback');
+    c.lock();
+    expect(c.tick(5, seatedHead, lookAhead, [frontWall()])).toBeNull();
+    expect(c.state).toBe('fallback');
+    c.start(10); // a new session searches again
+    expect(c.tick(10.1, seatedHead, lookAhead, [frontWall()])!.kind).toBe('wall');
   });
 
   it('stays on the fallback when a wall appears too late', () => {

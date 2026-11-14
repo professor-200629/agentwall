@@ -200,9 +200,33 @@ export function schedule(cal: CalendarData, constraint: Constraint = {}): Schedu
     if (alternatives.length === 2) break;
     if (s !== best && !alternatives.includes(s)) alternatives.push(s);
   }
-  return {
-    best,
-    alternatives,
-    reason: `Earliest ${cal.meeting.minutes}-min time you and ${cal.guest.name} are both free${rule ? `, ${rule}` : ''}.`,
-  };
+  return { best, alternatives, reason: explainChoice(cal, constraint, best) };
+}
+
+/**
+ * One short line (fits two lines on the slot card) saying what the agent ruled out
+ * and what it picked, e.g. "Mon, Tue full after 4 PM, so Wed 5:30 PM is first."
+ * Showing the reasoning matters for trust (judge review 14 Nov).
+ */
+export function explainChoice(cal: CalendarData, constraint: Constraint, best: Slot): string {
+  const today = splitStamp(cal.now).day;
+  const when = `${dayLabel(best.day).short.split(' ')[0]} ${clock(best.start)}`;
+  // Days from today up to the chosen day that had no time inside the rule.
+  // Days the user excluded ("not Wednesday") or other days when a single day was
+  // asked for are not "full", so they are not listed.
+  const skipped = constraint.day
+    ? []
+    : cal.days
+        .filter((d) => d >= today && d < best.day && !constraint.notDays?.includes(d))
+        .map((d) => dayLabel(d).short.split(' ')[0]);
+  const hours = [
+    constraint.after !== undefined ? `after ${clock(constraint.after).replace(':00', '')}` : '',
+    constraint.before !== undefined ? `before ${clock(constraint.before).replace(':00', '')}` : '',
+  ]
+    .filter(Boolean)
+    .join(' and ');
+  const rulePart = hours ? ` ${hours}` : '';
+  if (skipped.length === 0) return `${when} is the first time you and ${cal.guest.name} are both free.`;
+  if (skipped.length === 1) return `${skipped[0]} is full${rulePart}, so ${when} is first.`;
+  return `${skipped.join(', ')} full${rulePart}, so ${when} is first.`;
 }

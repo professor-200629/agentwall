@@ -31,11 +31,19 @@ export class PlacementController {
   state: PlacementState = 'idle';
   current: Placement | null = null;
   private startedAt = 0;
+  /** Set once the user starts using the board: it must not jump to a late wall. */
+  private locked = false;
 
   start(now: number): void {
     this.state = 'searching';
     this.current = null;
     this.startedAt = now;
+    this.locked = false;
+  }
+
+  /** The user is interacting with the board: keep it where it is (code review 14 Nov). */
+  lock(): void {
+    if (this.current) this.locked = true;
   }
 
   stop(): void {
@@ -48,7 +56,7 @@ export class PlacementController {
    * `now` is in seconds.
    */
   tick(now: number, head: V3, forward: V3, planes: ReadonlyArray<PlaneInput>): Placement | null {
-    if (this.state === 'idle' || this.state === 'wall') return null;
+    if (this.state === 'idle' || this.state === 'wall' || this.locked) return null;
     const elapsed = now - this.startedAt;
 
     if (elapsed <= TIMING.lateWallSeconds && planes.length > 0) {

@@ -55,14 +55,15 @@ describe('schedule', () => {
     expect(r.best?.id).toBe('2026-11-17T13:00');
     expect(r.best?.end).toBe(at(13, 30));
     expect(r.alternatives.map((s) => s.id)).toEqual(['2026-11-18T17:30', '2026-11-19T12:30']);
-    expect(r.reason).toBe('Earliest 30-min time you and Sam are both free.');
+    // Says what was ruled out (now = Mon 9:00, Monday has no shared free time).
+    expect(r.reason).toBe('Mon is full, so Tue 1:00 PM is first.');
   });
 
   it('"only after 4 PM" skips Tuesday (Sam commutes, then my gym) and picks Wed 5:30 PM', () => {
     const r = schedule(cal, { after: at(16) });
     expect(r.best?.id).toBe('2026-11-18T17:30');
     expect(r.alternatives.map((s) => s.id)).toEqual(['2026-11-19T16:00', '2026-11-20T17:30']);
-    expect(r.reason).toContain('after 4:00 PM');
+    expect(r.reason).toBe('Mon, Tue full after 4 PM, so Wed 5:30 PM is first.');
   });
 
   it('never returns a slot that touches anyone’s busy time or its 10-min buffer', () => {
@@ -102,6 +103,15 @@ describe('schedule', () => {
     expect(schedule(cal, { before: at(13) }).best?.id).toBe('2026-11-19T12:30');
     expect(schedule(cal, { day: '2026-11-20' }).best?.id).toBe('2026-11-20T17:30');
     expect(schedule(cal, { notDays: ['2026-11-17'] }).best?.id).toBe('2026-11-18T17:30');
+  });
+
+  it('the reason stays short enough for two lines on the card, and skips excluded days', () => {
+    for (const c of [{}, { after: at(16) }, { before: at(13) }, { notDays: ['2026-11-17'] }, { day: '2026-11-20' }]) {
+      const r = schedule(cal, c);
+      expect(r.reason.length, r.reason).toBeLessThanOrEqual(60);
+    }
+    expect(schedule(cal, { notDays: ['2026-11-17'] }).reason).toBe('Mon is full, so Wed 5:30 PM is first.');
+    expect(schedule(cal, { day: '2026-11-20' }).reason).toBe('Fri 5:30 PM is the first time you and Sam are both free.');
   });
 
   it('explains when nothing fits', () => {

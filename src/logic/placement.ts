@@ -63,9 +63,13 @@ export const BOARD: BoardSize = { width: 1.2, height: 0.94 };
 export const PLACEMENT = {
   /** Gap between wall and board so it never z-fights with the real wall. */
   wallGap: 0.02,
-  /** Walls nearer than this are probably the user's own side; farther ones are too far to read. */
-  minWallDistance: 0.4,
-  maxWallDistance: 4.0,
+  /**
+   * Usable walls: nearer than 0.9 m the board would fill the whole view; farther than
+   * 3 m its text is too small to read. Otherwise the board floats 1.2 m ahead
+   * (code review 14 Nov).
+   */
+  minWallDistance: 0.9,
+  maxWallDistance: 3.0,
   /** A wall must lie roughly in front: max angle between gaze and board centre. */
   maxAngleDeg: 60,
   /** Board centre sits a little below the eyes, which is comfortable when seated. */

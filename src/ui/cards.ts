@@ -63,14 +63,14 @@ export function drawSlotCard(
 
   font(c, 42, 700);
   c.fillStyle = COLORS.text;
-  c.fillText(clockRange(plan.slot.start, plan.slot.end), PAD, 238);
+  c.fillText(clockRange(plan.slot.start, plan.slot.end), PAD, 224);
   font(c, 26);
   c.fillStyle = COLORS.muted;
-  c.fillText(`${cal.timezone} · ${plan.slot.end - plan.slot.start} min · you + ${cal.guest.name}`, PAD, 276);
+  c.fillText(`${cal.timezone} · ${plan.slot.end - plan.slot.start} min · you + ${cal.guest.name}`, PAD, 260);
 
   font(c, 26);
   c.fillStyle = COLORS.muted;
-  drawWrapped(c, plan.reason, PAD, 328, inner, 32, 2);
+  drawWrapped(c, plan.reason, PAD, 304, inner, 32, 2);
 
   if (plan.alternatives.length > 0) {
     // The rows themselves are separate pinchable meshes (see ALT_ROW).
@@ -81,11 +81,12 @@ export function drawSlotCard(
 }
 
 /** Pixel layout of the "Also free" rows, shared with the board so meshes line up. */
+// Bigger hand-ray targets (code review 14 Nov): 58 px = 5.7 cm rows, 14 px gap.
 export const ALT_ROW = {
-  heightPx: 46,
-  gapPx: 8,
+  heightPx: 58,
+  gapPx: 14,
   padPx: PAD,
-  labelFromBottomPx: PAD + 46 * 2 + 8 + 16,
+  labelFromBottomPx: PAD + 58 * 2 + 14 + 16,
 };
 
 export function drawAltRow(
@@ -222,7 +223,7 @@ export function drawChip(
   c.textBaseline = 'alphabetic';
 }
 
-export const CHIP_FONT_PX = 22;
+export const CHIP_FONT_PX = 24;
 
 export interface OutboxView {
   subject: string;

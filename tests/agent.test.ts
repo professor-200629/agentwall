@@ -182,7 +182,9 @@ describe('checking the AI answer', () => {
     const after4 = planWithRules(cal, 'only after 4 PM', makePlan(cal)).plan!;
     const ids = buildPayload(cal, 'not Wednesday', after4).candidates.map((c) => c.id);
     expect(ids.every((id) => Number(id.slice(11, 13)) >= 16)).toBe(true);
-    expect(ids).toContain('2026-11-18T17:30');
+    // "not Wednesday" is understood by the rules, so Wednesday is already gone.
+    expect(ids.some((id) => id.startsWith(WED))).toBe(false);
+    expect(ids).toContain(`${THU}T16:00`);
     const all = buildPayload(cal, 'any time', after4).candidates.map((c) => c.id);
     expect(all).toContain('2026-11-17T13:00');
   });
@@ -194,6 +196,60 @@ describe('checking the AI answer', () => {
     expect(p.candidates.map((c) => c.id)).not.toContain('2026-11-17T09:00'); // busy
     expect(p.today).toBe('Monday 16 Nov, 9:00 AM');
     expect(JSON.stringify(p)).not.toContain('@'); // no email addresses leave the device
+  });
+});
+
+describe('chips always obey their rule (code review 14 Nov)', () => {
+  const start = makePlan(cal);
+  const base: AiAnswer = {
+    intent: 'rule',
+    rule: { after: null, before: null, day: null, notDays: [] },
+    slotId: null,
+    reason: '',
+    body: '',
+  };
+
+  it('an AI that reads "4 PM" as 04:00 cannot change the chip rule', () => {
+    const r = planFromAi(cal, { ...base, rule: { ...base.rule, after: '04:00' } }, start, 'only after 4 PM');
+    expect(r.plan!.constraint).toEqual({ after: at(16) });
+    expect(r.plan!.constraintText).toBe('only after 4 PM');
+    expect(r.plan!.slot!.id).toBe(`${WED}T17:30`);
+  });
+
+  it('an AI that says "unknown" cannot veto a chip', () => {
+    const r = planFromAi(cal, { ...base, intent: 'unknown' }, start, 'not Wednesday');
+    expect(r.plan).not.toBeNull();
+    expect(r.plan!.constraint).toEqual({ notDays: [WED] });
+  });
+
+  it('"any time" always clears the rule, whatever the AI says', () => {
+    const after4 = planWithRules(cal, 'only after 4 PM', start).plan!;
+    const r = planFromAi(cal, { ...base, intent: 'rule', rule: { ...base.rule, after: '16:00' } }, after4, 'any time');
+    expect(r.plan!.constraint).toEqual({});
+    expect(r.plan!.slot!.id).toBe('2026-11-17T13:00');
+  });
+
+  it('for a known request the AI only sees times inside the final rule', () => {
+    const p = buildPayload(cal, 'only after 4 PM', start);
+    expect(p.candidates.every((c) => Number(c.id.slice(11, 13)) >= 16)).toBe(true);
+    expect(p.currentRule).toBe('only after 4 PM');
+  });
+
+  it('a sentence the rules cannot read still uses the AI rule', () => {
+    const r = planFromAi(
+      cal,
+      { ...base, rule: { ...base.rule, day: THU }, slotId: `${THU}T12:30` },
+      start,
+      'whenever Sam is out of class on the 19th',
+    );
+    expect(r.plan!.constraint).toEqual({ day: THU });
+    expect(r.plan!.slot!.id).toBe(`${THU}T12:30`);
+  });
+
+  it('a busy AI (429) shows as "AI busy", not an error code', async () => {
+    const busy: FetchLike = async () => new Response('{}', { status: 429 });
+    const r = await runAgent(cal, 'only after 4 PM', start, { url: 'https://w.example', fetch: busy });
+    expect(r.note).toContain('AI busy');
   });
 });
 

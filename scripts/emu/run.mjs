@@ -186,7 +186,7 @@ plan = hook('plan');
 check('voice transcript "Thursday after 4" -> Thu 4:00 PM, and the board shows what it heard', plan?.slot?.id === '2026-11-19T16:00' && /Heard: “can we do it on Thursday after 4”/.test(hook('interaction').agentLine), `${plan?.slot?.id} | ${hook('interaction').agentLine}`);
 await hook('heard', 'what is the weather');
 await waitIdle();
-check('voice gibberish leaves the plan alone and says so', hook('plan').slot?.id === '2026-11-19T16:00' && /not sure/.test(hook('interaction').agentLine), hook('interaction').agentLine);
+check('voice gibberish leaves the plan alone and says so', hook('plan').slot?.id === '2026-11-19T16:00' && /not sure/i.test(hook('interaction').agentLine), hook('interaction').agentLine);
 
 // ---------- 7. Saved board survives a reload ----------
 aim('invite');
@@ -225,6 +225,22 @@ check('no wall: board floats and suggests Space Setup', hook('state') === 'fallb
 hook('simulateNoPlanes', false);
 await sleep(1500);
 check('wall appears: tip goes away', hook('state') === 'wall' && !/Space Setup/.test(hook('interaction').agentLine), hook('interaction').agentLine);
+
+// ---------- 10. Hold survives the hand ray drifting off the card (pointer capture) ----------
+hook('resetDemo');
+await tap('chip:task');
+await waitIdle();
+hook('setHoldSeconds', 3);
+aim('invite');
+await sleep(300);
+pinchValue(1);
+await sleep(400);
+xr('look-at', { device: 'hand-right', target: { x: -1.5, y: 2.5, z: -2 } }); // ray far off the card
+await sleep(3500);
+it = hook('interaction');
+check('hold keeps going when the ray drifts off the invite mid-hold', hook('plan').approval === 'approved', `approval=${hook('plan').approval} peak=${it.peakHold.toFixed(2)}`);
+pinchValue(0);
+hook('setHoldSeconds', 1);
 
 look(0, -10);
 console.log(`\n${results.filter(Boolean).length}/${results.length} passed`);

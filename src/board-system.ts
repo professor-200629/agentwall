@@ -35,7 +35,7 @@ import { addToOutbox, approve, chooseSlot, isLinked, type OutboxItem, type Plan 
 import { parseRequest } from './logic/request.js';
 import type { CalendarData } from './logic/scheduler.js';
 import { restore, serialize, STORAGE_KEY } from './logic/storage.js';
-import { playApproved, playTick } from './ui/sound.js';
+import { playApproved, playTick, unlockAudio } from './ui/sound.js';
 import { VoiceInput } from './voice.js';
 
 const calendar = calendarJson as CalendarData;
@@ -45,9 +45,11 @@ const MODEL_LABEL = 'Groq';
 /** Each chip's rule, parsed once (not every frame). */
 const CHIP_RULES = CHIPS.map((c) => parseRequest(c.say, calendar).rule);
 
-/** An Object3D as IWSDK's pointer system sees it. */
+/** An Object3D as IWSDK's pointer system (@pmndrs/pointer-events) sees it. */
 interface PointerTarget {
-  addEventListener(type: 'pointerdown', listener: () => void): void;
+  addEventListener(type: 'pointerdown' | 'pointerup', listener: (e: { pointerId: number }) => void): void;
+  setPointerCapture(pointerId: number): void;
+  releasePointerCapture(pointerId: number): void;
 }
 
 interface NativePlane {
@@ -171,6 +173,12 @@ export class BoardSystem extends createSystem({
       (mesh as PointerTarget).addEventListener('pointerdown', () => this.presses.push({ kind, index }));
     this.board.chipPanels.forEach((chip, i) => onPress(chip.mesh, 'chip', i));
     this.board.altRows.forEach((row, i) => onPress(row.mesh, 'alt', i));
+    // Pinch-and-hold: capture the pointer on the invite so a hand ray that drifts off
+    // the card mid-hold keeps it pressed (without capture IWSDK drops Pressed on
+    // pointer-leave and only re-adds it on a new pinch; code review 14 Nov).
+    const invite = this.board.inviteCard.mesh as unknown as PointerTarget;
+    invite.addEventListener('pointerdown', (e) => invite.setPointerCapture(e.pointerId));
+    invite.addEventListener('pointerup', (e) => invite.releasePointerCapture(e.pointerId));
 
     this.voice = new VoiceInput(
       this.agentUrl,
@@ -189,6 +197,16 @@ export class BoardSystem extends createSystem({
       this.say('Rules mode (AI not connected)', 'muted');
     }
     this.board.setOutbox(this.outbox);
+
+    // A judge may enter through Quest Browser's own Enter button, which never clicks our
+    // page, so sound would stay locked. XR select (pinch) events count as a user
+    // gesture: unlock audio on the first pinch of each session (code review 14 Nov).
+    const onSessionStart = () => {
+      const session = this.xrManager.getSession();
+      session?.addEventListener('selectstart', unlockAudio, { once: true });
+    };
+    this.xrManager.addEventListener('sessionstart', onSessionStart);
+    this.cleanupFuncs.push(() => this.xrManager.removeEventListener('sessionstart', onSessionStart));
 
     this.cleanupFuncs.push(
       this.world.visibilityState.subscribe((v) => {
@@ -237,20 +255,22 @@ export class BoardSystem extends createSystem({
     }
     if (id !== this.requestId) return; // a newer request won
     this.lastAskMs = performance.now() - t0;
-    const pre = heard ? `${heard} · ` : '';
+    // Result first, then what was heard: the line is trimmed from the end when long,
+    // so the attribution must never be the part that gets cut (code review 14 Nov).
+    const post = heard ? ` · ${heard}` : '';
     if (!result.plan) {
-      this.say(heard ? `${heard} · not sure what you meant; try a chip` : 'Not sure what you meant', 'warn');
+      this.say(heard ? `Not sure what you meant; try a chip · ${heard}` : 'Not sure what you meant', 'warn');
       return;
     }
     this.setPlan(result.plan);
     playTick();
-    if (result.by === 'ai' && !result.note) this.say(`${pre}Planned by AI · ${MODEL_LABEL}`, 'ai');
+    if (result.by === 'ai' && !result.note) this.say(`Planned by AI · ${MODEL_LABEL}${post}`, 'ai');
     else if (result.by === 'ai') {
       // Short, calm wording: the rules double-checking the AI is a feature, not an error.
       const fixed = /did not fit/.test(result.note) ? 'rules corrected the time' : 'email from template';
-      this.say(`${pre}Planned by AI · ${fixed}`, 'ai');
+      this.say(`Planned by AI · ${fixed}${post}`, 'ai');
     }
-    else this.say(`${pre}${result.note ? `Rules · ${result.note.replace(/; rules planned this$/, '')}` : 'Planned by rules'}`, 'warn');
+    else this.say(`${result.note ? `Rules · ${result.note.replace(/; rules planned this$/, '')}` : 'Planned by rules'}${post}`, 'warn');
   }
 
   // ---------- pinches ----------
@@ -266,6 +286,7 @@ export class BoardSystem extends createSystem({
     // Chips and "Also free" rows, in the order they were pressed.
     for (const press of this.presses.splice(0)) {
       if (!live) continue;
+      this.controller.lock(); // the user is using the board: no more jumping
       if (press.kind === 'chip') {
         const chip = CHIPS[press.index];
         if (chip.id === 'mic') void this.voice.toggle();
@@ -288,6 +309,7 @@ export class BoardSystem extends createSystem({
       this.holdPlanVersion = current.version;
     }
     const canApprove = live && !this.busy && current?.invite != null && current.approval === 'needs';
+    if (this.inviteEntity.hasComponent(Pressed)) this.controller.lock();
     const event = this.hold.update(delta, this.inviteEntity.hasComponent(Pressed), canApprove);
     if (event === 'complete' && current) {
       const result = approve(current, new Date().toISOString());
@@ -314,6 +336,7 @@ export class BoardSystem extends createSystem({
       if (chip.id === 'mic') {
         if (this.voice.state === 'listening') this.board.setChip(i, 'listening', `● Listening ${this.voice.remaining}`);
         else if (this.voice.state === 'transcribing') this.board.setChip(i, 'busy', 'Hearing…');
+        else if (this.voice.state === 'starting') this.board.setChip(i, 'busy', 'Mic…');
         else if (!this.voice.available) this.board.setChip(i, 'disabled');
         else this.board.setChip(i, hovered === i ? 'hover' : 'normal');
         return;
