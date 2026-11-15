@@ -536,6 +536,8 @@ export class BoardSystem extends createSystem({
         }
       } else if (press.kind === 'invite' && this.sendingUntil !== null) {
         this.unsend();
+      } else if (press.kind === 'move' && this.world.visibilityState.value === VisibilityState.NonImmersive) {
+        this.say('Move board works in mixed reality: it moves the board to the wall you look at', 'muted');
       } else if (press.kind === 'move' && this.moveUntil === null) {
         this.moveUntil = this.clockS + this.moveSeconds;
         this.say('Look at the spot on your wall where you want the board', 'ai');
