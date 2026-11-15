@@ -76,11 +76,15 @@ export const LAYOUT = (() => {
   const moveW = px(210);
   const moveH = px(56);
   const move = { x: W / 2 - margin - moveW / 2, y: H / 2 - px(78) - moveH / 2, w: moveW, h: moveH };
+  // Voice on/off, just left of Move.
+  const voiceW = px(64);
+  const voice = { x: move.x - moveW / 2 - px(12) - voiceW / 2, y: move.y, w: voiceW, h: moveH };
   const replan = { x: 0, y: mural.y - mural.h / 2 + 0.135, w: 0.8, h: 0.13 };
   return {
     chips,
     mural,
     move,
+    voice,
     pill: { w: 0.2, h: 0.05 },
     replan,
     replanYes: { x: replan.x + 0.17, y: replan.y, w: 0.14, h: 0.07 },
@@ -131,6 +135,13 @@ export class Board {
   readonly backPanel = new CanvasPanel(BOARD.width, BOARD.height, 'board');
   readonly moveButton = new CanvasPanel(LAYOUT.move.w, LAYOUT.move.h, 'move-board');
   private moveLook = '';
+  readonly voiceButton = new CanvasPanel(LAYOUT.voice.w, LAYOUT.voice.h, 'voice-toggle');
+  private voiceLook = '';
+  /** First 10 seconds: a pulsing glow says "start here" on the first chip until you ask. */
+  private startGlow = new CanvasPanel(LAYOUT.chips[0].w + 0.05, LAYOUT.chips[0].h + 0.05, 'start-glow');
+  /** The board pops in when it lands. */
+  private appearT = -1;
+  private appearScale = 1;
   readonly mural = new CanvasPanel(LAYOUT.mural.w, LAYOUT.mural.h, 'week-mural');
   readonly altRows = [0, 1].map((i) => new CanvasPanel(LAYOUT.pill.w, LAYOUT.pill.h, `alt-slot-${i}`));
   private tray = new CanvasPanel(LAYOUT.tray.w, LAYOUT.tray.h, 'outbox-tray');
@@ -187,6 +198,16 @@ export class Board {
     this.add(this.object, this.replanButtons[0].mesh, LAYOUT.replanYes.x, LAYOUT.replanYes.y, Z.button, 6);
     this.add(this.object, this.replanButtons[1].mesh, LAYOUT.replanNo.x, LAYOUT.replanNo.y, Z.button, 6);
     this.add(this.object, this.moveButton.mesh, LAYOUT.move.x, LAYOUT.move.y, Z.pill, 4);
+    this.add(this.object, this.voiceButton.mesh, LAYOUT.voice.x, LAYOUT.voice.y, Z.pill, 4);
+    this.add(this.object, this.startGlow.mesh, LAYOUT.chips[0].x, LAYOUT.chips[0].y, Z.pill - 0.002, 3);
+    this.startGlow.draw((c, w, h) => {
+      c.shadowColor = COLORS.link;
+      c.shadowBlur = 18;
+      c.lineWidth = 6;
+      c.strokeStyle = COLORS.link;
+      roundRect(c, 12, 12, w - 24, h - 24, (h - 24) / 2);
+      c.stroke();
+    });
     this.add(this.object, this.cue.mesh, 0, 0, Z.cue, 7);
     CHIPS.forEach((_c, i) => this.setChip(i, 'normal'));
     this.setMove('⤢ Move board', false);
@@ -202,6 +223,8 @@ export class Board {
       hitPad(b.mesh, r.w, r.h, px(10), px(14));
     });
     hitPad(this.moveButton.mesh, LAYOUT.move.w, LAYOUT.move.h, px(14), px(12));
+    hitPad(this.voiceButton.mesh, LAYOUT.voice.w, LAYOUT.voice.h, px(6), px(12));
+    this.setVoiceButton(true, false);
 
     // Desk: glow behind the invite, the invite, and the ring in front.
     this.add(this.desk, this.glow.mesh, 0, 0, -0.002, 2);
@@ -302,6 +325,27 @@ export class Board {
     return { dayIndex, minute };
   }
 
+  /** The voice toggle: speaker on or off. */
+  setVoiceButton(on: boolean, hovered: boolean): void {
+    const key = `${on}|${hovered}`;
+    if (key === this.voiceLook) return;
+    this.voiceLook = key;
+    this.voiceButton.draw((c, w, h) => drawButton(c, w, h, on ? '🔊' : '🔇', false, hovered, 26));
+  }
+
+  /** Test hook: is the "start here" glow showing? */
+  get startHintVisible(): boolean {
+    return this.startGlow.mesh.visible;
+  }
+
+  /** The board just landed (or moved): pop in from 90% with a soft sound. */
+  appear(scale: number): void {
+    this.appearScale = scale;
+    this.appearT = 0;
+    this.object.scale.setScalar(scale * 0.9);
+    playLand();
+  }
+
   /** The Move button's label (e.g. a countdown) and hover state. */
   setMove(label: string, hovered: boolean): void {
     const key = `${label}|${hovered}`;
@@ -364,6 +408,7 @@ export class Board {
       this.sweepStep = -1;
     }
     this.mural.mesh.visible = view.plan !== null && view.week !== null;
+    if (!view.plan) this.altRows.forEach((row) => (row.mesh.visible = false)); // no plan, no runner-ups
     if (planChanged || weekChanged) this.sweepStep = -1; // force a mural redraw
     this.drawMuralIfNeeded();
 
@@ -497,6 +542,18 @@ export class Board {
         this.cue.mesh.visible = false;
       }
     }
+    // First 10 seconds: pulse "start here" on the first chip until there is a plan.
+    this.startGlow.mesh.visible = this.plan === null && this.object.visible;
+    if (this.startGlow.mesh.visible) {
+      (this.startGlow.mesh.material as MeshBasicMaterial).opacity = 0.45 + 0.45 * Math.sin(time * 4);
+    }
+    if (this.appearT >= 0) {
+      this.appearT += dt;
+      const t = Math.min(1, this.appearT / 0.35);
+      const e = 1 - (1 - t) ** 3;
+      this.object.scale.setScalar(this.appearScale * (0.9 + 0.1 * e));
+      if (t >= 1) this.appearT = -1;
+    }
     // The invite flight: wait for the sweep, then arc from the gold slot to the desk.
     if (this.flyPending && this.sweep >= 1) {
       this.flyPending = false;
@@ -585,11 +642,25 @@ export class Board {
     const s = STATUS[this.status];
     const plan = this.plan;
     this.backPanel.draw((c, W, H) => {
+      // Glass: a dark, see-through gradient with a soft light along the top edge.
       roundRect(c, 4, 4, W - 8, H - 8, 36);
-      c.fillStyle = COLORS.board;
+      const glass = c.createLinearGradient(0, 0, 0, H);
+      glass.addColorStop(0, 'rgba(30, 37, 54, 0.86)');
+      glass.addColorStop(0.35, 'rgba(18, 22, 32, 0.84)');
+      glass.addColorStop(1, 'rgba(12, 15, 22, 0.86)');
+      c.fillStyle = glass;
+      c.fill();
+      const sheen = c.createLinearGradient(0, 0, W * 0.6, H * 0.5);
+      sheen.addColorStop(0, 'rgba(255, 255, 255, 0.07)');
+      sheen.addColorStop(1, 'rgba(255, 255, 255, 0)');
+      c.fillStyle = sheen;
       c.fill();
       c.lineWidth = 4;
-      c.strokeStyle = COLORS.line;
+      c.strokeStyle = 'rgba(160, 190, 255, 0.28)';
+      c.stroke();
+      c.lineWidth = 2;
+      c.strokeStyle = 'rgba(255, 255, 255, 0.10)';
+      roundRect(c, 10, 10, W - 20, H - 20, 30);
       c.stroke();
 
       font(c, 54, 700);
@@ -605,7 +676,7 @@ export class Board {
       font(c, 28, 500);
       c.fillStyle = COLORS.text;
       const task = plan ? `Task · ${plan.task}` : s.hint || 'Ask your agent: pinch a chip below, or 🎤 Speak';
-      drawWrapped(c, task, 44, 130, W - 88 - LAYOUT.move.w * PX_PER_M - 20, 34, 1);
+      drawWrapped(c, task, 44, 130, W - 88 - (LAYOUT.move.w + LAYOUT.voice.w) * PX_PER_M - 32, 34, 1);
       font(c, 24);
       c.fillStyle = COLORS.muted;
       const rule = plan?.constraintText ? `Rule · ${plan.constraintText}` : 'Rule · none';

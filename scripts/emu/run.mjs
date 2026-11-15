@@ -541,6 +541,22 @@ await hook('heard', 'only after 4 PM');
 await waitIdle();
 check('a new rule, a new spoken time', /^Wednesday at 5:30 PM works for you and Sam\./.test(hook('spoken')), hook('spoken'));
 
+// ---------- 20. Polish: start-here glow, voice toggle, the board pops in ----------
+look(0);
+hook('restart');
+await sleep(2500);
+check('the board pops in to its full size when it lands', Math.abs(hook('flow').boardScale - hook('placement').scale) < 0.001, `scale ${hook('flow').boardScale} vs ${hook('placement').scale}`);
+hook('resetDemo');
+await sleep(300);
+check('a fresh board pulses "start here" on the first chip, and shows no leftover times', hook('flow').startHint === true && hook('mural').pills === 0, `startHint=${hook('flow').startHint} pills=${hook('mural').pills}`);
+await tap('chip:task');
+await waitIdle();
+check('once you ask, the start-here glow goes away', hook('flow').startHint === false);
+await tap('voice');
+check('the speaker button turns the voice off', hook('flow').voiceOn === false && /Voice off/.test(hook('interaction').agentLine), hook('interaction').agentLine);
+await tap('voice');
+check('and on again', hook('flow').voiceOn === true && /Voice on/.test(hook('interaction').agentLine), hook('interaction').agentLine);
+
 look(0, -10);
 console.log(`\n${results.filter(Boolean).length}/${results.length} passed`);
 process.exit(results.every(Boolean) ? 0 : 1);

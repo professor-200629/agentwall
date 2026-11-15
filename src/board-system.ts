@@ -64,7 +64,7 @@ import { nextSteps, prepBlock, reminderItem, type NextStep, type NextStepKind } 
 import type { WeekBlock } from './logic/week.js';
 import type { AgentCardView } from './board.js';
 import { lineFor, type SpokenMoment } from './logic/lines.js';
-import { speak, stopSpeaking } from './ui/voice-out.js';
+import { setSpeechEnabled, speak, speechEnabled, stopSpeaking } from './ui/voice-out.js';
 import { playApproved, playTick, unlockAudio } from './ui/sound.js';
 import type { InviteExtras } from './ui/cards.js';
 import { VoiceInput } from './voice.js';
@@ -111,8 +111,11 @@ interface NativePlane {
 
 type Press =
   | { kind: 'chip' | 'alt' | 'replan'; index: number }
-  | { kind: 'invite' | 'move'; index: 0 }
+  | { kind: 'invite' | 'move' | 'voice'; index: 0 }
   | { kind: 'mural'; index: 0; u: number; v: number };
+
+/** Voice on/off, remembered in this browser. */
+const VOICE_KEY = 'agentwall.voice';
 
 /** A next-step offer nobody answers is skipped after this many seconds, so the demo moves on. */
 const NEXT_STEP_TIMEOUT = 25;
@@ -159,7 +162,7 @@ export interface AgentWallDebug {
   /** The week mural: sweep still playing? how many half hours ruled out? */
   mural: () => { visible: boolean; sweeping: boolean; ruledOut: number; fresh: number };
   /** Unsend window and conflict state. */
-  flow: () => { sendingLeft: number | null; conflict: string | null; replan: boolean; watchFired: boolean; clock: number; moving: boolean; card: string | null; prep: boolean };
+  flow: () => { sendingLeft: number | null; conflict: string | null; replan: boolean; watchFired: boolean; clock: number; moving: boolean; card: string | null; prep: boolean; voiceOn: boolean; startHint: boolean; boardScale: number };
   /** Test hook: fire the agent's sample change now (instead of 8 s after the first send). */
   watchNow: () => void;
   /** Same path as Quest's recenter (XRReferenceSpace 'reset'). */
@@ -236,6 +239,7 @@ export class BoardSystem extends createSystem({
   private recenterAt: number | null = null;
   private resetSpace: XRReferenceSpace | null = null;
   private moveEntity!: Entity;
+  private voiceEntity!: Entity;
   private backEntity!: Entity;
   /** Where the hand ray is on the week (texture uv), for the hover highlight. */
   private muralUv: { u: number; v: number } | null = null;
@@ -311,6 +315,8 @@ export class BoardSystem extends createSystem({
     this.chipEntities = this.board.chipPanels.map((chip) => interactive(chip.mesh, boardEntity));
     this.replanEntities = this.board.replanButtons.map((b) => interactive(b.mesh, boardEntity));
     this.moveEntity = interactive(this.board.moveButton.mesh, boardEntity);
+    this.voiceEntity = interactive(this.board.voiceButton.mesh, boardEntity);
+    if (readStorage(VOICE_KEY) === 'off') setSpeechEnabled(false);
     // The board itself is a (do-nothing) ray target: IWSDK only shows the hand ray's
     // cursor on targets, and the first Quest tester saw no pointer until exactly on a chip.
     this.backEntity = interactive(this.board.backPanel.mesh, boardEntity);
@@ -331,6 +337,7 @@ export class BoardSystem extends createSystem({
     this.board.altRows.forEach((row, i) => onPress(row.mesh, { kind: 'alt', index: i }));
     this.board.replanButtons.forEach((b, i) => onPress(b.mesh, { kind: 'replan', index: i }));
     onPress(this.board.moveButton.mesh, { kind: 'move', index: 0 });
+    onPress(this.board.voiceButton.mesh, { kind: 'voice', index: 0 });
     // A pinch on the bare board does nothing, but it still captures the ray so the
     // release always arrives (see capture()).
     const back = this.board.backPanel.mesh as unknown as PointerTarget;
@@ -601,6 +608,12 @@ export class BoardSystem extends createSystem({
         this.answerCard(press.index === 0);
       } else if (press.kind === 'invite' && this.sendingUntil !== null) {
         this.unsend();
+      } else if (press.kind === 'voice') {
+        const on = !speechEnabled();
+        setSpeechEnabled(on);
+        writeStorage(on ? null : 'off', VOICE_KEY);
+        this.say(on ? 'Voice on' : 'Voice off · the board still shows every line', 'muted');
+        if (on) this.speakLine('Voice on.');
       } else if (press.kind === 'mural') {
         this.pressMural(press.u, press.v);
       } else if (press.kind === 'move' && this.world.visibilityState.value === VisibilityState.NonImmersive) {
@@ -633,6 +646,7 @@ export class BoardSystem extends createSystem({
       this.hoveredIndex(this.replanEntities),
     );
     this.updateMuralHover();
+    this.board.setVoiceButton(speechEnabled(), this.voiceEntity.hasComponent(Hovered));
     const moveLeft = this.moveUntil === null ? 0 : Math.max(1, Math.ceil(this.moveUntil - this.clockS));
     this.board.setMove(
       this.moveUntil === null ? '⤢ Move board' : `Look at a wall · ${moveLeft}`,
@@ -950,6 +964,7 @@ export class BoardSystem extends createSystem({
     o.scale.setScalar(p.scale);
     o.visible = true;
     this.board.setStatus(p.remembered ? 'same-wall' : p.kind);
+    if (this.world.visibilityState.value !== VisibilityState.NonImmersive) this.board.appear(p.scale);
     if (p.kind === 'wall') this.rememberWall(p);
     const why = this.placingFor;
     this.placingFor = null;
@@ -1046,6 +1061,7 @@ export class BoardSystem extends createSystem({
           'replan:yes': at(this.board.replanButtons[0].mesh),
           'replan:no': at(this.board.replanButtons[1].mesh),
           move: at(this.board.moveButton.mesh),
+          voice: at(this.board.voiceButton.mesh),
           mural: at(this.board.mural.mesh),
         };
         CHIPS.forEach((c, i) => (t[`chip:${c.id}`] = at(this.board.chipPanels[i].mesh)));
@@ -1080,6 +1096,7 @@ export class BoardSystem extends createSystem({
       weekCells: () => this.currentWeek()?.cells ?? [],
       mural: () => ({
         hover: this.board.muralHoverLabel,
+        pills: this.board.altRows.filter((r) => r.mesh.visible).length,
         visible: this.board.mural.mesh.visible && this.board.object.visible,
         sweeping: this.board.sweeping,
         flying: this.board.flying,
@@ -1096,6 +1113,9 @@ export class BoardSystem extends createSystem({
         watchFired: this.watchFired,
         clock: this.clockS,
         moving: this.moveUntil !== null,
+        voiceOn: speechEnabled(),
+        startHint: this.board.startHintVisible,
+        boardScale: this.board.object.scale.x,
       }),
       recenter: () => {
         this.onReset();
