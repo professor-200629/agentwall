@@ -312,7 +312,7 @@ check('no table within reach: the invite comes above the lap', hook('desk')?.kin
 // The emulator room never changes, so every check here has a control: a new
 // seat and gaze that would put the board somewhere else without the memory.
 const dist3 = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
-const seat2 = () => xr('set-transform', { device: 'headset', position: { x: 0.35, y: 1.15, z: 0.25 }, orientation: { pitch: 0, yaw: -18, roll: 0 } });
+const seat2 = () => xr('set-transform', { device: 'headset', position: { x: 0.35, y: 1.15, z: 0.25 }, orientation: { pitch: 0, yaw: -6, roll: 0 } });
 look(0);
 hook('forgetWall');
 hook('restart');
@@ -325,7 +325,7 @@ hook('restart');
 await sleep(2000);
 let pl = hook('placement');
 let here = hook('board').position;
-check('new seat, new gaze: the board comes back to the same spot on the same wall', pl?.remembered === true && dist3(here, spot) < 0.02 && /Back on your wall/.test(hook('interaction').agentLine), `moved ${dist3(here, spot).toFixed(3)} m | ${hook('interaction').agentLine}`);
+check('new seat, slightly different gaze: the board comes back to the same spot on the same wall', pl?.remembered === true && dist3(here, spot) < 0.02 && /Back on your wall/.test(hook('interaction').agentLine), `moved ${dist3(here, spot).toFixed(3)} m | ${hook('interaction').agentLine}`);
 cli(['browser', 'reload']);
 await sleep(3500);
 await enterXr();
@@ -346,6 +346,76 @@ hook('restart');
 await sleep(2000);
 pl = hook('placement');
 check('facing another wall: the board goes there as usual, and that wall is remembered next', pl?.kind === 'wall' && pl.remembered !== true && JSON.stringify(hook('wallMemory')) !== memBefore, `kind=${pl?.kind} remembered=${pl?.remembered}`);
+look(0);
+hook('restart');
+await sleep(1500);
+
+// ---------- 15. Fixes from the first real Quest test (steve40, 15 Nov) ----------
+look(0);
+hook('forgetWall');
+hook('restart');
+await sleep(2000);
+hook('resetDemo');
+hook('setWatch', false);
+let pp = hook('placement');
+const sc = pp.scale;
+const at = (lx, ly) => ({ x: pp.position.x + lx * sc, y: pp.position.y + ly * sc, z: pp.position.z });
+const aimAt = (p) => {
+  xr('set-transform', { device: 'hand-right', position: { x: 0.18, y: 1.0, z: -0.3 }, orientation: { pitch: 0, yaw: 0, roll: 0 } });
+  xr('look-at', { device: 'hand-right', target: p });
+};
+check('board faces the user square on the front wall', pp.kind === 'wall' && Math.abs(pp.yaw) < 0.05, `yaw=${pp.yaw.toFixed(3)}`);
+
+// "Hard to see the laser pointer": the bare board is now a ray target, so the cursor shows anywhere on it.
+aimAt(at(-0.35, 0.4));
+await sleep(400);
+check('pointing at a bare part of the board shows the cursor (board is a ray target)', hook('interaction').boardHovered === true, JSON.stringify(hook('interaction')));
+
+// "Pointing requires extreme accuracy": a pinch just below a chip (outside it) still hits it.
+const chipT = hook('targets')['chip:task'];
+const below = { x: chipT[0], y: chipT[1] - (0.0293 + 0.01) * sc, z: chipT[2] };
+let pressesBefore = hook('interaction').presses;
+aimAt(below);
+await sleep(300);
+const hov = hook('interaction').chipHovered;
+xr('select', { device: 'hand-right', duration: 0.2 });
+await sleep(400);
+await waitIdle();
+check('a pinch 1 cm below the chip still presses it (bigger hit area)', hov === 0 && hook('interaction').presses === pressesBefore + 1 && hook('plan')?.slot?.id === '2026-11-17T13:00', `hover=${hov} presses ${pressesBefore}->${hook('interaction').presses}`);
+
+// Hidden buttons must not catch the ray (pointer library hits hidden meshes).
+const hiddenYes = hook('targets')['replan:yes'];
+pressesBefore = hook('interaction').presses;
+aimAt({ x: hiddenYes[0], y: hiddenYes[1], z: hiddenYes[2] });
+await sleep(300);
+const hidHover = hook('interaction').replanHovered;
+xr('select', { device: 'hand-right', duration: 0.2 });
+await sleep(400);
+check('the hidden Re-plan button does not catch the ray (IWSDK skips hidden objects)', hidHover === null && hook('interaction').presses === pressesBefore, `hover=${hidHover} presses ${pressesBefore}->${hook('interaction').presses}`);
+
+// "No way for me to adjust the position of the board": Move board, then look where you want it.
+const startPos = hook('board').position;
+hook('setMoveSeconds', 12); // emulator commands take ~1 s each
+await tap('move');
+check('pinching Move board starts a look-at-a-wall countdown', hook('flow').moving === true && /Look at the spot/.test(hook('interaction').agentLine), hook('interaction').agentLine);
+look(30);
+for (let i = 0; i < 40 && hook('flow').moving; i++) await sleep(500);
+await sleep(2500);
+hook('setMoveSeconds', 3);
+const moved = hook('board').position;
+pp = hook('placement');
+check('after the countdown the board moves to where you look, and is remembered there', pp?.kind === 'wall' && !pp.remembered && dist3(moved, startPos) > 0.5 && /Board moved/.test(hook('interaction').agentLine) && Math.abs(hook('wallMemory').fromLeft - mem.fromLeft) > 0.5, `moved ${dist3(moved, startPos).toFixed(2)} m | ${hook('interaction').agentLine}`);
+
+// "Re-centering my headset made the board move to the right side of me": stay on the spot.
+look(-60);
+hook('recenter');
+await sleep(1500);
+const afterRecenter = hook('board').position;
+check('a headset recenter keeps the board on its spot in the room', dist3(afterRecenter, moved) < 0.02 && /Recentered/.test(hook('interaction').agentLine), `moved ${dist3(afterRecenter, moved).toFixed(3)} m | ${hook('interaction').agentLine}`);
+hook('forgetWall');
+hook('recenter');
+await sleep(4000);
+check('control: without the memory the same recenter puts the board somewhere else', dist3(hook('board').position, moved) > 0.3, `${dist3(hook('board').position, moved).toFixed(2)} m`);
 look(0);
 hook('restart');
 await sleep(1500);

@@ -61,6 +61,37 @@ describe('chooseWall', () => {
     expect(p!.position.z).toBeCloseTo(-2 + PLACEMENT.wallGap);
   });
 
+  it('accepts only planes labelled wall (Quest also labels furniture sides, doors, screens)', () => {
+    for (const label of ['storage', 'shelf', 'couch', 'other', 'door_frame', 'invisible wall face', 'wall art']) {
+      expect(chooseWall(seatedHead, lookAhead, [frontWall({ label })])).toBeNull();
+    }
+    expect(chooseWall(seatedHead, lookAhead, [frontWall({ label: 'WALL' })])).not.toBeNull();
+  });
+
+  it('does not use a wall seen side-on (Quest test: "angled at 45 degrees to me")', () => {
+    // The same wall, but the user sits 1.6 m to its side and looks along it at 50°.
+    const side = { x: 2.6, y: 1.2, z: -0.1 };
+    const look = { x: -Math.sin((50 * Math.PI) / 180), y: 0, z: -Math.cos((50 * Math.PI) / 180) };
+    expect(chooseWall(side, look, [frontWall()])).toBeNull();
+    // Seen nearly square, the same wall is fine.
+    expect(chooseWall({ x: 0.3, y: 1.2, z: 0 }, lookAhead, [frontWall()])).not.toBeNull();
+  });
+
+  it('prefers the wall that faces the user over a nearer wall seen at an angle', () => {
+    const S2 = Math.SQRT1_2;
+    // A side wall 1.1 m to the left (normal +X), long enough to reach in front of the user.
+    const sideWall: PlaneInput = {
+      id: 3,
+      position: { x: -1.1, y: 1.25, z: -1.5 },
+      orientation: { x: 0, y: 0, z: -S2, w: S2 },
+      polygon: rect(1.5, 1.25),
+      vertical: true,
+      label: 'wall',
+    };
+    const look = { x: -Math.sin((25 * Math.PI) / 180), y: 0, z: -Math.cos((25 * Math.PI) / 180) };
+    expect(chooseWall(seatedHead, look, [sideWall, frontWall()])!.planeId).toBe(1);
+  });
+
   it('accepts an unlabelled vertical plane', () => {
     expect(chooseWall(seatedHead, lookAhead, [frontWall({ label: undefined })])).not.toBeNull();
   });

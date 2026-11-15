@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { chooseWall, rotate, type PlaneInput, type Quat, type V3 } from '../src/logic/placement.js';
 import { PlacementController, TIMING } from '../src/logic/placement-controller.js';
 import {
+  ANY_ANGLE,
   parsePrint,
   placeOnRememberedWall,
   SAME_WALL,
@@ -121,9 +122,23 @@ describe('placeOnRememberedWall', () => {
     expect(placeOnRememberedWall(head, { x: 0, y: 0, z: 1 }, [frontWall()], print)).toBeNull();
   });
 
+  it('a new session uses the old spot only when it is near the gaze (Quest test: "off-centre")', () => {
+    // The old spot is 14° right of straight ahead: fine looking ahead or 20° right...
+    expect(placeOnRememberedWall(head, ahead, [frontWall()], print)).not.toBeNull();
+    // ...but looking 25° left it would sit ~39° off-centre, so the board is centred instead.
+    const left25: V3 = { x: -Math.sin((25 * Math.PI) / 180), y: 0, z: -Math.cos((25 * Math.PI) / 180) };
+    expect(placeOnRememberedWall(head, left25, [frontWall()], print)).toBeNull();
+  });
+
+  it('after a recenter the old spot comes back even when the user looks away', () => {
+    const back = placeOnRememberedWall(head, { x: 1, y: 0, z: 0 }, [frontWall()], print, ANY_ANGLE)!;
+    expect(back.position.x).toBeCloseTo(0.5);
+    expect(back.remembered).toBe(true);
+  });
+
   it('keeps the board inside the wall when the old spot is at its edge', () => {
     const edge: WallPrint = { ...print, fromLeft: 0.05 };
-    const p = placeOnRememberedWall(head, ahead, [frontWall()], edge)!;
+    const p = placeOnRememberedWall(head, ahead, [frontWall()], edge, ANY_ANGLE)!;
     expect(p.position.x).toBeCloseTo(-2 + (1.2 * p.scale) / 2); // board's left edge on the wall's left end
   });
 });
@@ -191,6 +206,14 @@ describe('PlacementController with a remembered wall', () => {
     c.tick(0.1, head, lookLeft, [sideWall(5)]);
     c.lock();
     expect(c.tick(0.8, head, ahead, [sideWall(5), frontWall({ id: 9 })])).toBeNull();
+  });
+
+  it('a recenter restores the remembered spot wherever the user looks', () => {
+    const c = new PlacementController();
+    c.start(0, print, { anyAngle: true });
+    const p = c.tick(0.1, head, lookLeft, [sideWall(5), frontWall()])!;
+    expect(p.remembered).toBe(true);
+    expect(p.position.x).toBeCloseTo(0.5);
   });
 
   it('without a memory it behaves exactly as before', () => {

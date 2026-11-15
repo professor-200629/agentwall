@@ -74,6 +74,12 @@ export const PLACEMENT = {
   maxWallDistance: 3.0,
   /** A wall must lie roughly in front: max angle between gaze and board centre. */
   maxAngleDeg: 60,
+  /**
+   * The board must face the user: max angle between the wall's normal and the line
+   * from the board to the eyes. A real Quest test (15 Nov) put the board on a wall
+   * seen side-on, "angled at 45 degrees to me".
+   */
+  maxFacingDeg: 40,
   /** Board centre sits a little below the eyes, which is comfortable when seated. */
   belowEye: 0.1,
   /** Smallest wall we accept, as a fraction of the board size. */
@@ -82,8 +88,12 @@ export const PLACEMENT = {
   fallbackDistance: 1.2,
 } as const;
 
-/** Labels that mean "this vertical plane is not a free wall". */
-export const NOT_A_WALL = new Set(['door', 'window', 'screen', 'wall_art', 'wall art']);
+/**
+ * Only planes labelled "wall" (or with no label at all) host the board. Quest also
+ * reports doors, windows, screens, wall art and the sides of furniture (storage,
+ * shelf, couch, other...), so an allow-list is safer than a deny-list.
+ */
+export const isWallLabel = (label: string | undefined): boolean => !label || label.toLowerCase() === 'wall';
 
 const UP: V3 = { x: 0, y: 1, z: 0 };
 
@@ -147,7 +157,7 @@ export interface WallFrame {
 /** The wall frame of a plane, or null when the plane is not a free wall. */
 export function wallFrame(head: V3, plane: PlaneInput): WallFrame | null {
   if (!plane.vertical) return null;
-  if (plane.label && NOT_A_WALL.has(plane.label.toLowerCase())) return null;
+  if (!isWallLabel(plane.label)) return null;
   if (plane.polygon.length < 3) return null;
 
   // Normal, made horizontal and pointed at the user.
@@ -181,6 +191,15 @@ export function wallFrame(head: V3, plane: PlaneInput): WallFrame | null {
  * kept inside the wall's edges. Returns null when the wall is too near, too
  * far, too small, or the spot is more than maxAngle from where the user looks.
  */
+export interface SpotLimits {
+  /** Max angle between the gaze and the board centre. */
+  maxAngle: number;
+  /** Max angle the board may be seen side-on; Infinity skips the check. */
+  maxFacing: number;
+}
+
+export const NEW_SPOT: SpotLimits = { maxAngle: PLACEMENT.maxAngleDeg, maxFacing: PLACEMENT.maxFacingDeg };
+
 export function spotOnWall(
   head: V3,
   forward: V3,
@@ -188,7 +207,7 @@ export function spotOnWall(
   frame: WallFrame,
   wantU: number,
   wantY: number,
-  maxAngle: number,
+  limits: SpotLimits = NEW_SPOT,
   board: BoardSize = BOARD,
 ): WallCandidate | null {
   const { n, t, dist, uMin, uMax, vMin, vMax } = frame;
@@ -204,8 +223,12 @@ export function spotOnWall(
   const onWall = add(plane.position, scale(t, u));
   const position = add({ x: onWall.x, y, z: onWall.z }, scale(n, PLACEMENT.wallGap));
   const toBoard = sub(position, head);
-  const angle = angleDeg(flatForward(forward), { x: toBoard.x, y: 0, z: toBoard.z });
-  if (angle > maxAngle) return null;
+  const flatToBoard = { x: toBoard.x, y: 0, z: toBoard.z };
+  const angle = angleDeg(flatForward(forward), flatToBoard);
+  if (angle > limits.maxAngle) return null;
+  // How side-on the board is seen: 0 = square to the eyes.
+  const facing = angleDeg(n, scale(flatToBoard, -1));
+  if (facing > limits.maxFacing) return null;
 
   const distance = len(toBoard);
   return {
@@ -216,8 +239,8 @@ export function spotOnWall(
     scale: boardScale,
     planeId: plane.id,
     angleDeg: angle,
-    // Prefer the wall straight ahead, then the nearer one.
-    score: angle + 4 * distance,
+    // Prefer the wall straight ahead, then the one that faces you, then the nearer one.
+    score: angle + 0.5 * facing + 4 * distance,
   };
 }
 
@@ -244,7 +267,7 @@ export function placeOnWall(
   } else {
     u = dot(sub(head, plane.position), t);
   }
-  return spotOnWall(head, forward, plane, frame, u, head.y - PLACEMENT.belowEye, PLACEMENT.maxAngleDeg, board);
+  return spotOnWall(head, forward, plane, frame, u, head.y - PLACEMENT.belowEye, NEW_SPOT, board);
 }
 
 /** Best wall in front of the user, or null when there is none. */

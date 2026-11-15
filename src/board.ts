@@ -17,6 +17,7 @@ import {
   Group,
   Mesh,
   MeshBasicMaterial,
+  PlaneGeometry,
   RingGeometry,
 } from '@iwsdk/core';
 import { CHIPS, type ChipLook } from './chips.js';
@@ -67,10 +68,15 @@ export const LAYOUT = (() => {
     return r;
   });
   const mural = { x: 0, y: (top + bottom) / 2, w: W - margin * 2, h: top - bottom };
+  // "Move board" button under the status chip (the first Quest tester could not move it).
+  const moveW = px(210);
+  const moveH = px(56);
+  const move = { x: W / 2 - margin - moveW / 2, y: H / 2 - px(78) - moveH / 2, w: moveW, h: moveH };
   const replan = { x: 0, y: mural.y - mural.h / 2 + 0.135, w: 0.8, h: 0.13 };
   return {
     chips,
     mural,
+    move,
     pill: { w: 0.2, h: 0.05 },
     replan,
     replanYes: { x: replan.x + 0.17, y: replan.y, w: 0.14, h: 0.07 },
@@ -104,7 +110,10 @@ export class Board {
   private plan: Plan | null = null;
   private week: WeekModel | null = null;
   private fresh = new Set<string>();
-  private backPanel = new CanvasPanel(BOARD.width, BOARD.height, 'board');
+  /** The board itself: pinchable only so the hand ray shows a cursor anywhere on it. */
+  readonly backPanel = new CanvasPanel(BOARD.width, BOARD.height, 'board');
+  readonly moveButton = new CanvasPanel(LAYOUT.move.w, LAYOUT.move.h, 'move-board');
+  private moveLook = '';
   readonly mural = new CanvasPanel(LAYOUT.mural.w, LAYOUT.mural.h, 'week-mural');
   readonly altRows = [0, 1].map((i) => new CanvasPanel(LAYOUT.pill.w, LAYOUT.pill.h, `alt-slot-${i}`));
   private tray = new CanvasPanel(LAYOUT.tray.w, LAYOUT.tray.h, 'outbox-tray');
@@ -144,8 +153,21 @@ export class Board {
     this.add(this.object, this.replanPanel.mesh, LAYOUT.replan.x, LAYOUT.replan.y, Z.replan, 5);
     this.add(this.object, this.replanButtons[0].mesh, LAYOUT.replanYes.x, LAYOUT.replanYes.y, Z.button, 6);
     this.add(this.object, this.replanButtons[1].mesh, LAYOUT.replanNo.x, LAYOUT.replanNo.y, Z.button, 6);
+    this.add(this.object, this.moveButton.mesh, LAYOUT.move.x, LAYOUT.move.y, Z.pill, 4);
     this.add(this.object, this.cue.mesh, 0, 0, Z.cue, 7);
     CHIPS.forEach((_c, i) => this.setChip(i, 'normal'));
+    this.setMove('⤢ Move board', false);
+
+    // Bigger, invisible hit areas round every button: the first Quest tester said
+    // pinching the chips "requires extreme accuracy". Chip pads meet halfway across
+    // the gap between chips, so there is no dead zone and no overlap.
+    this.chipPanels.forEach((chip, i) => hitPad(chip.mesh, LAYOUT.chips[i].w, LAYOUT.chips[i].h, px(5), px(16)));
+    this.altRows.forEach((row) => hitPad(row.mesh, LAYOUT.pill.w, LAYOUT.pill.h, px(12), px(12)));
+    this.replanButtons.forEach((b, i) => {
+      const r = i === 0 ? LAYOUT.replanYes : LAYOUT.replanNo;
+      hitPad(b.mesh, r.w, r.h, px(10), px(14));
+    });
+    hitPad(this.moveButton.mesh, LAYOUT.move.w, LAYOUT.move.h, px(14), px(12));
 
     // Desk: glow behind the invite, the invite, and the ring in front.
     this.add(this.desk, this.glow.mesh, 0, 0, -0.002, 2);
@@ -192,6 +214,14 @@ export class Board {
     this.setOutbox([]);
     this.object.visible = false;
     this.drawBack();
+  }
+
+  /** The Move button's label (e.g. a countdown) and hover state. */
+  setMove(label: string, hovered: boolean): void {
+    const key = `${label}|${hovered}`;
+    if (key === this.moveLook) return;
+    this.moveLook = key;
+    this.moveButton.draw((c, w, h) => drawButton(c, w, h, label, false, hovered, 22));
   }
 
   private add(parent: Group, mesh: Mesh, x: number, y: number, z: number, order: number): void {
@@ -413,7 +443,7 @@ export class Board {
       font(c, 28, 500);
       c.fillStyle = COLORS.text;
       const task = plan ? `Task · ${plan.task}` : s.hint || 'Ask your agent: pinch a chip below, or 🎤 Speak';
-      drawWrapped(c, task, 44, 130, W - 88, 34, 1);
+      drawWrapped(c, task, 44, 130, W - 88 - LAYOUT.move.w * PX_PER_M - 20, 34, 1);
       font(c, 24);
       c.fillStyle = COLORS.muted;
       const rule = plan?.constraintText ? `Rule · ${plan.constraintText}` : 'Rule · none';
@@ -451,14 +481,36 @@ export class Board {
   }
 }
 
-function drawButton(c: CanvasRenderingContext2D, w: number, h: number, text: string, primary: boolean, hover: boolean): void {
+/**
+ * An invisible, bigger hit area behind a button. The mesh stays "visible" (IWSDK's
+ * pointers skip hidden objects: filter isObjectTreeVisible); only its material is
+ * switched off, so three.js never draws it.
+ */
+function hitPad(mesh: Mesh, w: number, h: number, padX: number, padY: number): void {
+  const pad = new Mesh(new PlaneGeometry(w + padX * 2, h + padY * 2), new MeshBasicMaterial({ visible: false }));
+  pad.name = `${mesh.name || 'button'}-hit`;
+  pad.position.z = -0.0005;
+  mesh.add(pad);
+}
+
+function drawButton(
+  c: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  text: string,
+  primary: boolean,
+  hover: boolean,
+  size = 26,
+): void {
   roundRect(c, 2, 2, w - 4, h - 4, (h - 4) / 2);
   c.fillStyle = primary ? (hover ? '#9cc4ff' : COLORS.link) : hover ? 'rgba(255,255,255,0.3)' : 'rgba(255,255,255,0.12)';
   c.fill();
   c.lineWidth = 3;
   c.strokeStyle = primary ? COLORS.link : COLORS.line;
   c.stroke();
-  font(c, 26, 800);
+  let px = size;
+  font(c, px, 800);
+  while (px > 14 && c.measureText(text).width > w - 24) font(c, --px, 800);
   c.fillStyle = primary ? COLORS.ink : COLORS.text;
   c.textBaseline = 'middle';
   c.fillText(text, (w - c.measureText(text).width) / 2, h / 2 + 1);

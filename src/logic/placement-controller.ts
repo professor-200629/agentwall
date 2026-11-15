@@ -24,7 +24,7 @@ import {
   type Placement,
   type V3,
 } from './placement.js';
-import { placeOnRememberedWall, type WallPrint } from './same-wall.js';
+import { ANY_ANGLE, placeOnRememberedWall, type WallPrint } from './same-wall.js';
 
 export type PlacementState = 'idle' | 'searching' | 'fallback' | 'wall';
 
@@ -43,14 +43,22 @@ export class PlacementController {
   private memory: WallPrint | null = null;
   /** Plane ids known when the board landed on a different wall than the remembered one. */
   private knownAtLanding: Set<number> | null = null;
+  /** After a recenter: put the board back on its spot wherever the user looks. */
+  private anyAngle = false;
 
-  start(now: number, memory: WallPrint | null = null): void {
+  /**
+   * @param memory the wall remembered from last time, or null
+   * @param opts.anyAngle restore the remembered spot even if it is not in view
+   *   (the headset was recentered; the room did not move)
+   */
+  start(now: number, memory: WallPrint | null = null, opts: { anyAngle?: boolean } = {}): void {
     this.state = 'searching';
     this.current = null;
     this.startedAt = now;
     this.locked = false;
     this.memory = memory;
     this.knownAtLanding = null;
+    this.anyAngle = !!opts.anyAngle;
   }
 
   /** The user is interacting with the board: keep it where it is (code review 14 Nov). */
@@ -85,7 +93,10 @@ export class PlacementController {
         // Already on another wall: only planes that arrived since then may match.
         const known = this.knownAtLanding;
         const fresh = known ? planes.filter((p) => !known.has(p.id)) : planes;
-        const back = fresh.length > 0 ? placeOnRememberedWall(head, forward, fresh, this.memory) : null;
+        const back =
+          fresh.length > 0
+            ? placeOnRememberedWall(head, forward, fresh, this.memory, this.anyAngle ? ANY_ANGLE : undefined)
+            : null;
         if (back) {
           this.state = 'wall';
           this.current = back;

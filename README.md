@@ -6,8 +6,10 @@ and nothing goes out until you pinch and hold to approve.
 Entry for the Meta VR Start Developer Competition 2026 (Productivity track).
 Built with Meta's [Immersive Web SDK](https://iwsdk.dev) (WebXR), hands only.
 
-**Status: 14 Nov, after Day 5.** Real AI connected; tested in Meta's Quest 3
-emulator only, not yet on a real Quest. **Have a Quest? Please try the 10-step
+**Status: 15 Nov.** Real AI connected. **First real Quest 3 test done** (by
+steve40 on the Meta forum): pinch-and-hold, the ring and the chime worked; the
+board placement, recentering and aiming problems found there are fixed (see
+"Fixes from the first Quest test" below) and re-tested in the emulator. **Have a Quest? Please try the 10-step
 checklist: [docs/TESTING-ON-QUEST.md](docs/TESTING-ON-QUEST.md).**
 
 1. The app finds a wall and puts the board on it (or floats it 1.2 m in front
@@ -29,9 +31,10 @@ checklist: [docs/TESTING-ON-QUEST.md](docs/TESTING-ON-QUEST.md).**
    conflict, and a **Re-plan?** card appears. Re-planning moves the invite to a
    new time, and it needs your hold again. The agent never re-sends on its own.
 6. **Same wall next time:** the board remembers which wall it was on and where.
-   Next time you enter, it comes back to the same spot ("BACK ON YOUR WALL"),
-   even if you sit a little differently or look elsewhere. The plan and the
-   demo outbox are saved in your browser too.
+   Next time you enter looking about the same way, it comes back to the same
+   spot ("BACK ON YOUR WALL"); look clearly elsewhere and it centres on your
+   view instead. Pinch **⤢ Move board** and look at a wall to put it somewhere
+   else. The plan and the demo outbox are saved in your browser too.
 
 Screenshots from Meta's Quest 3 emulator (IWER), not a real headset:
 
@@ -90,13 +93,23 @@ npx iwsdk dev down
   height, bottom edge) plus the board's distance from the wall's left end and
   its height. All measured in the room, not in session coordinates, so a new
   session from another spot still finds it. A wall that matches within 8 cm
-  and is in front (75°) gets the board back on its old spot; two same-size
+  gets the board back on its old spot if that spot is within 15° of your gaze
+  (after a headset recenter: wherever you look); two same-size
   walls are told apart by where you look. If the board first lands on another
   wall, it moves only when the remembered wall arrives late as a new plane, so
   turning your head never moves it. No WebXR anchors. Assumption, not yet
   checked on a Quest: Space Setup reports the same wall sizes every session.
 - `src/board-system.ts`: the IWSDK system that feeds detected planes and the
   head pose into that logic and moves the board.
+
+## Fixes from the first Quest test (15 Nov)
+
+| What the tester saw | Cause | Fix |
+| --- | --- | --- |
+| Board "angled at 45 degrees to me" | Any wall within 60° of the gaze was allowed, so a wall seen side-on could win; any vertical plane not on a short deny-list counted as a wall | Only planes labelled `wall`; the board must face you within 40°; walls that face you score better |
+| Board off-centre, "no way for me to adjust" it | The remembered spot was used even 20° to the side | Remembered spot only within 15° of your gaze; new **⤢ Move board** button (pinch, look at a wall for 3 s) |
+| Recentering the headset moved the board to the side | Recenter moves the WebXR origin; nothing listened for the reference space `reset` event | On `reset`, the board goes back to its remembered spot in the room |
+| Hard to see the pointer, aiming "requires extreme accuracy" | IWSDK only shows the ray's cursor on targets, and the board was not one; chips were small hit targets | The whole board is a (do-nothing) ray target, so the cursor shows everywhere on it; invisible hit areas round every button (chips +1.6 cm up and down, meeting halfway across the gaps) |
 
 ## How the agent plans
 

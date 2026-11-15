@@ -20,6 +20,7 @@ import {
   PLACEMENT,
   spotOnWall,
   sub,
+  type SpotLimits,
   wallFrame,
   type BoardSize,
   type PlaneInput,
@@ -45,10 +46,19 @@ export interface WallPrint {
 export const SAME_WALL = {
   /** How far each size may differ and still count as the same wall. */
   tolerance: 0.08,
-  /** The remembered spot may sit a little further to the side than a new spot. */
-  maxAngleDeg: PLACEMENT.maxAngleDeg + 15,
+  /**
+   * A new session uses the old spot only when it is nearly where the user looks.
+   * The first real Quest test (15 Nov) found a remembered spot 20° to the side
+   * reads as "off-centre, and I can't move it"; beyond this the board is centred
+   * on the gaze instead.
+   */
+  maxAngleDeg: 15,
   storageKey: 'agentwall.wall.v1',
 } as const;
+
+/** After a headset recenter the board must stay put in the room, wherever the user looks. */
+export const ANY_ANGLE: SpotLimits = { maxAngle: 180, maxFacing: Infinity };
+const NEAR_GAZE: SpotLimits = { maxAngle: SAME_WALL.maxAngleDeg, maxFacing: PLACEMENT.maxFacingDeg };
 
 const labelOf = (plane: PlaneInput): string => (plane.label ?? 'wall').toLowerCase();
 
@@ -79,22 +89,24 @@ export function matchesPrint(plane: PlaneInput, frame: WallFrame, print: WallPri
 }
 
 /**
- * The remembered spot on the remembered wall, if that wall is here and roughly
- * in front of the user. Two walls of the same size (opposite walls of a
- * rectangular room) are told apart by where the user is looking.
+ * The remembered spot on the remembered wall, if that wall is here and the spot
+ * is near where the user looks (or anywhere, with ANY_ANGLE after a recenter).
+ * Two walls of the same size (opposite walls of a rectangular room) are told
+ * apart by where the user is looking.
  */
 export function placeOnRememberedWall(
   head: V3,
   forward: V3,
   planes: ReadonlyArray<PlaneInput>,
   print: WallPrint,
+  limits: SpotLimits = NEAR_GAZE,
   board: BoardSize = BOARD,
 ): WallCandidate | null {
   let best: WallCandidate | null = null;
   for (const plane of planes) {
     const frame = wallFrame(head, plane);
     if (!frame || !matchesPrint(plane, frame, print)) continue;
-    const c = spotOnWall(head, forward, plane, frame, frame.uMax - print.fromLeft, print.y, SAME_WALL.maxAngleDeg, board);
+    const c = spotOnWall(head, forward, plane, frame, frame.uMax - print.fromLeft, print.y, limits, board);
     if (c && (best === null || c.score < best.score)) best = { ...c, remembered: true };
   }
   return best;

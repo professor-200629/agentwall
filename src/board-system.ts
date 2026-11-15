@@ -37,7 +37,7 @@ import { runAgent, type AgentResult, type FetchLike } from './logic/agent.js';
 import { chooseDesk, type DeskPlacement } from './logic/desk.js';
 import { HOLD, HoldToApprove } from './logic/hold.js';
 import { PlacementController } from './logic/placement-controller.js';
-import { fallbackPlacement, type PlaneInput, type Placement } from './logic/placement.js';
+import { fallbackPlacement, isWallLabel, type PlaneInput, type Placement } from './logic/placement.js';
 import { parsePrint, SAME_WALL, serializePrint, wallPrint, type WallPrint } from './logic/same-wall.js';
 import {
   addToOutbox,
@@ -94,7 +94,12 @@ interface NativePlane {
   polygon: ReadonlyArray<{ x: number; z: number }>;
 }
 
-type Press = { kind: 'chip' | 'alt' | 'replan'; index: number } | { kind: 'invite'; index: 0 };
+type Press = { kind: 'chip' | 'alt' | 'replan'; index: number } | { kind: 'invite' | 'move'; index: 0 };
+
+/** Seconds to look at the new spot after pinching "Move board". */
+export const MOVE_SECONDS = 3;
+
+type PlacementRequest = { useMemory: boolean; anyAngle?: boolean; why?: 'move' | 'recenter' };
 
 export interface AgentWallDebug {
   state: () => string;
@@ -131,9 +136,12 @@ export interface AgentWallDebug {
   /** The week mural: sweep still playing? how many half hours ruled out? */
   mural: () => { visible: boolean; sweeping: boolean; ruledOut: number; fresh: number };
   /** Unsend window and conflict state. */
-  flow: () => { sendingLeft: number | null; conflict: string | null; replan: boolean; watchFired: boolean; clock: number };
+  flow: () => { sendingLeft: number | null; conflict: string | null; replan: boolean; watchFired: boolean; clock: number; moving: boolean };
   /** Test hook: fire the agent's sample change now (instead of 8 s after the first send). */
   watchNow: () => void;
+  /** Same path as Quest's recenter (XRReferenceSpace 'reset'). */
+  recenter: () => void;
+  setMoveSeconds: (seconds: number) => void;
   /** Test hook: turn the automatic sample change on/off (off keeps long test runs predictable). */
   setWatch: (on: boolean) => void;
   /** Test hook: what the mic would have heard (the emulator has no microphone). */
@@ -190,6 +198,17 @@ export class BoardSystem extends createSystem({
   /** The wall the board was on last time (same spot next session); kept apart from the plan. */
   private wallMemory: WallPrint | null = parsePrint(readStorage(SAME_WALL.storageKey));
   private pendingStart = false;
+  private pendingRequest: PlacementRequest = { useMemory: true };
+  /** The placement in progress was asked for by Move or a recenter (for the status line). */
+  private placingFor: PlacementRequest['why'] | null = null;
+  /** "Move board": countdown end, in app seconds. */
+  private moveUntil: number | null = null;
+  private moveSeconds = MOVE_SECONDS;
+  /** Headset recentered: re-place the board at this time (planes need a moment to update). */
+  private recenterAt: number | null = null;
+  private resetSpace: XRReferenceSpace | null = null;
+  private moveEntity!: Entity;
+  private backEntity!: Entity;
   private headPos = new Vector3();
   private headQuat = new Quaternion();
   private headFwd = new Vector3();
@@ -252,6 +271,10 @@ export class BoardSystem extends createSystem({
     this.altEntities = this.board.altRows.map((row) => interactive(row.mesh, boardEntity));
     this.chipEntities = this.board.chipPanels.map((chip) => interactive(chip.mesh, boardEntity));
     this.replanEntities = this.board.replanButtons.map((b) => interactive(b.mesh, boardEntity));
+    this.moveEntity = interactive(this.board.moveButton.mesh, boardEntity);
+    // The board itself is a (do-nothing) ray target: IWSDK only shows the hand ray's
+    // cursor on targets, and the first Quest tester saw no pointer until exactly on a chip.
+    this.backEntity = interactive(this.board.backPanel.mesh, boardEntity);
 
     // IWSDK's pointer system dispatches pointer events on the Object3D itself.
     // A fast click can press and release between two frames, so presses are
@@ -266,6 +289,11 @@ export class BoardSystem extends createSystem({
     this.board.chipPanels.forEach((chip, i) => onPress(chip.mesh, { kind: 'chip', index: i }));
     this.board.altRows.forEach((row, i) => onPress(row.mesh, { kind: 'alt', index: i }));
     this.board.replanButtons.forEach((b, i) => onPress(b.mesh, { kind: 'replan', index: i }));
+    onPress(this.board.moveButton.mesh, { kind: 'move', index: 0 });
+    // A pinch on the bare board does nothing, but it still captures the ray so the
+    // release always arrives (see capture()).
+    const back = this.board.backPanel.mesh as unknown as PointerTarget;
+    back.addEventListener('pointerdown', (e) => capture(back, e));
     // Pinch-and-hold: a pinch that STARTS on the invite keeps holding until the hand
     // opens (XR selectend, or mouse-up), even if the ray drifts off the card.
     // The ray capture above already keeps the hit on the card; inviteHeld is a second,
@@ -320,7 +348,10 @@ export class BoardSystem extends createSystem({
       session?.addEventListener('selectstart', unlockAudio, { once: true });
       // The hand opened (or tracking ended): the invite hold stops.
       session?.addEventListener('selectend', () => this.releaseHold());
-      session?.addEventListener('end', () => this.releaseHold());
+      session?.addEventListener('end', () => {
+        this.releaseHold();
+        this.detachReset();
+      });
     };
     this.xrManager.addEventListener('sessionstart', onSessionStart);
     this.cleanupFuncs.push(() => this.xrManager.removeEventListener('sessionstart', onSessionStart));
@@ -345,6 +376,7 @@ export class BoardSystem extends createSystem({
 
   update(delta: number, time: number): void {
     this.clockS = time;
+    this.attachReset();
     this.voice.tick();
     this.updateInteraction(delta);
     this.updateTimers();
@@ -353,6 +385,36 @@ export class BoardSystem extends createSystem({
     this.board.tick(delta, time);
     if (this.world.visibilityState.value === VisibilityState.NonImmersive) return;
     this.updatePlacement(time);
+  }
+
+  /**
+   * Quest's recenter moves the session's coordinate origin, so the board (fixed in
+   * those coordinates) jumped "to the right side of me" in the first real test.
+   * The room did not move: put the board back on its remembered spot.
+   */
+  private readonly onReset = () => {
+    this.recenterAt = this.clockS + 0.4;
+  };
+
+  private attachReset(): void {
+    if (this.resetSpace || !this.xrManager.isPresenting) return;
+    const space = this.xrManager.getReferenceSpace();
+    if (!space) return;
+    space.addEventListener('reset', this.onReset);
+    this.resetSpace = space;
+  }
+
+  private detachReset(): void {
+    this.resetSpace?.removeEventListener('reset', this.onReset);
+    this.resetSpace = null;
+    this.recenterAt = null;
+  }
+
+  /** Re-run placement (Move board, recenter, restart). */
+  private requestPlacement(req: PlacementRequest): void {
+    this.pendingRequest = req;
+    this.pendingStart = true;
+    this.placingFor = req.why ?? null;
   }
 
   private say(text: string, tone: 'muted' | 'ai' | 'warn' | 'ok'): void {
@@ -474,6 +536,10 @@ export class BoardSystem extends createSystem({
         }
       } else if (press.kind === 'invite' && this.sendingUntil !== null) {
         this.unsend();
+      } else if (press.kind === 'move' && this.moveUntil === null) {
+        this.moveUntil = this.clockS + this.moveSeconds;
+        this.say('Look at the spot on your wall where you want the board', 'ai');
+        playTick();
       }
     }
 
@@ -496,6 +562,11 @@ export class BoardSystem extends createSystem({
       canApprove && this.inviteEntity.hasComponent(Hovered),
       this.hoveredIndex(this.altEntities),
       this.hoveredIndex(this.replanEntities),
+    );
+    const moveLeft = this.moveUntil === null ? 0 : Math.max(1, Math.ceil(this.moveUntil - this.clockS));
+    this.board.setMove(
+      this.moveUntil === null ? '⤢ Move board' : `Look at a wall · ${moveLeft}`,
+      this.moveUntil === null && this.moveEntity.hasComponent(Hovered),
     );
   }
 
@@ -529,6 +600,14 @@ export class BoardSystem extends createSystem({
   }
 
   private updateTimers(): void {
+    if (this.moveUntil !== null && this.clockS >= this.moveUntil) {
+      this.moveUntil = null;
+      this.requestPlacement({ useMemory: false, why: 'move' }); // where the user looks now
+    }
+    if (this.recenterAt !== null && this.clockS >= this.recenterAt) {
+      this.recenterAt = null;
+      if (this.board.object.visible) this.requestPlacement({ useMemory: true, anyAngle: true, why: 'recenter' });
+    }
     // Unsend window over: the invite lands in the demo outbox with its receipt.
     if (this.sendingUntil !== null && this.clockS >= this.sendingUntil && this.plan && this.currentItemId) {
       const week = this.currentWeek();
@@ -626,7 +705,9 @@ export class BoardSystem extends createSystem({
   private updatePlacement(time: number): void {
     if (this.pendingStart) {
       this.pendingStart = false;
-      this.controller.start(time, this.wallMemory);
+      const req = this.pendingRequest;
+      this.pendingRequest = { useMemory: true };
+      this.controller.start(time, req.useMemory ? this.wallMemory : null, { anyAngle: req.anyAngle });
     }
     if (this.controller.settled) return;
     const head = this.player.head;
@@ -666,10 +747,24 @@ export class BoardSystem extends createSystem({
     o.visible = true;
     this.board.setStatus(p.remembered ? 'same-wall' : p.kind);
     if (p.kind === 'wall') this.rememberWall(p);
-    if (p.remembered) this.say('Back on your wall · same spot as last time', 'ok');
-    if (p.kind === 'fallback' && this.world.visibilityState.value !== VisibilityState.NonImmersive) {
-      this.say('No wall found · run Space Setup in Quest settings to pin the board to a wall', 'warn');
-    } else if (p.kind === 'wall' && /No wall found/.test(this.agentLineText)) {
+    const why = this.placingFor;
+    this.placingFor = null;
+    const immersive = this.world.visibilityState.value !== VisibilityState.NonImmersive;
+    if (p.kind === 'fallback' && immersive) {
+      const hasWalls = this.lastPlanes.some((q) => q.vertical && isWallLabel(q.label));
+      this.say(
+        hasWalls
+          ? 'No wall square in front of you · floating here · pinch Move board and look at a wall'
+          : 'No wall found · run Space Setup in Quest settings to pin the board to a wall',
+        'warn',
+      );
+    } else if (why === 'move') {
+      this.say('Board moved · it comes back here next time', 'ok');
+    } else if (why === 'recenter') {
+      if (p.remembered) this.say('Recentered · board kept on its spot', 'ok');
+    } else if (p.remembered) {
+      this.say('Back on your wall · same spot as last time', 'ok');
+    } else if (p.kind === 'wall' && /No wall|square in front/.test(this.agentLineText)) {
       this.say('', 'muted');
     }
     // The desk decides: the invite card goes to the real table in front, or the lap.
@@ -747,6 +842,7 @@ export class BoardSystem extends createSystem({
           alt1: at(this.board.altRows[1].mesh),
           'replan:yes': at(this.board.replanButtons[0].mesh),
           'replan:no': at(this.board.replanButtons[1].mesh),
+          move: at(this.board.moveButton.mesh),
         };
         CHIPS.forEach((c, i) => (t[`chip:${c.id}`] = at(this.board.chipPanels[i].mesh)));
         return t;
@@ -757,6 +853,8 @@ export class BoardSystem extends createSystem({
         invitePressed: this.inviteEntity.hasComponent(Pressed),
         altHovered: this.hoveredIndex(this.altEntities),
         chipHovered: this.hoveredIndex(this.chipEntities),
+        boardHovered: this.backEntity.hasComponent(Hovered),
+        replanHovered: this.hoveredIndex(this.replanEntities),
         presses: this.pressCount,
         inviteHeld: this.inviteHeld,
         boardVisible: this.board.object.visible,
@@ -786,7 +884,14 @@ export class BoardSystem extends createSystem({
         replan: this.replanText !== null,
         watchFired: this.watchFired,
         clock: this.clockS,
+        moving: this.moveUntil !== null,
       }),
+      recenter: () => {
+        this.onReset();
+      },
+      setMoveSeconds: (seconds) => {
+        this.moveSeconds = seconds;
+      },
       watchNow: () => {
         this.watchAt = null;
         this.fireWatch();

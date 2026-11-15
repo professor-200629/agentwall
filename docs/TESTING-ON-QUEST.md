@@ -54,6 +54,10 @@ The app saves its board only in your browser.
    should come back to the **same spot on the same wall**, and the chip in its
    top-right corner should say "BACK ON YOUR WALL". Did it land in the same
    place?
+   - Pinch **⤢ Move board** (top right) and look at another spot on your wall
+     for 3 seconds. Did the board move there?
+   - Hold the Meta button to recenter your view. Did the board stay where it
+     was on the wall?
 10. Close the browser tab, open the link again: it should say
     "Welcome back · board saved …".
 
