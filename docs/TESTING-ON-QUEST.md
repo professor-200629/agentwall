@@ -50,10 +50,20 @@ The app saves its board only in your browser.
    - After 5 s the card shows a receipt (RULES / AI / YOU). About 8 s later a
      red "Conflict" appears and a **Re-plan?** card on the wall: pinch
      **Re-plan** and check the invite moves to a new time.
-8. Pinch **🎤 Speak** and say: *"Thursday please"*. Wait ~5 s.
+8. New in the latest build (any order, all optional):
+   - After asking, the email card should **fly down from the wall to your
+     table**, and you may **hear the agent** say the time (🔊 button = voice
+     on/off). Did you hear it?
+   - After an invite is sent, the agent offers a **prep block** and a
+     **reminder**: pinch the left or right button.
+   - Pinch **🎯 Focus 2 h**: a 2-hour block on Thursday, as a calendar card.
+   - Hold an **open palm toward your face** for a second (no pinch): a ring
+     fills and the board comes to where you look. Did it ever trigger when you
+     did not want it?
+9. Pinch **🎤 Speak** and say: *"Thursday please"*. Wait ~5 s.
    - Did the browser ask for the microphone? Did it break the
      mixed reality view? What did the board show after "Heard: …"?
-9. Leave mixed reality (Meta button › exit, or close). Shift in your seat or
+10. Leave mixed reality (Meta button › exit, or close). Shift in your seat or
    turn your head a little, then press **Enter mixed reality** again. The board
    should come back to the **same spot on the same wall**, and the chip in its
    top-right corner should say "BACK ON YOUR WALL". Did it land in the same
@@ -62,7 +72,7 @@ The app saves its board only in your browser.
      for 3 seconds. Did the board move there?
    - Hold the Meta button to recenter your view. Did the board stay where it
      was on the wall?
-10. Close the browser tab, open the link again: it should say
+11. Close the browser tab, open the link again: it should say
     "Welcome back · board saved …".
 
 ## Please send back

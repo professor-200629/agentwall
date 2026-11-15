@@ -39,6 +39,12 @@ export class PlacementController {
   private startedAt = 0;
   /** Set once the user starts using the board: it must not jump to a late wall. */
   private locked = false;
+  /** How long a late wall may still win (tests stretch it: emulator commands are slow). */
+  lateWallSeconds: number = TIMING.lateWallSeconds;
+  /** Seconds since start(), for tests. */
+  age(now: number): number {
+    return now - this.startedAt;
+  }
   /** The wall remembered from last time, if any. */
   private memory: WallPrint | null = null;
   /** Plane ids known when the board landed on a different wall than the remembered one. */
@@ -85,10 +91,10 @@ export class PlacementController {
   tick(now: number, head: V3, forward: V3, planes: ReadonlyArray<PlaneInput>): Placement | null {
     if (this.state === 'idle' || this.locked) return null;
     const elapsed = now - this.startedAt;
-    if (elapsed > TIMING.lateWallSeconds) this.knownAtLanding = null;
+    if (elapsed > this.lateWallSeconds) this.knownAtLanding = null;
     if (this.settled) return null;
 
-    if (elapsed <= TIMING.lateWallSeconds && planes.length > 0) {
+    if (elapsed <= this.lateWallSeconds && planes.length > 0) {
       if (this.memory) {
         // Already on another wall: only planes that arrived since then may match.
         const known = this.knownAtLanding;

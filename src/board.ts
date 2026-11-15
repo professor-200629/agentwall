@@ -127,6 +127,10 @@ export interface BoardView {
 export class Board {
   readonly object = new Group();
   readonly desk = new Group();
+  /** Palm-up cue: a small label and ring over your palm while you hold it. */
+  readonly palm = new Group();
+  private palmLabel = new CanvasPanel(0.26, 0.05, 'palm-label');
+  private palmRing: Mesh<RingGeometry, MeshBasicMaterial>;
   status: BoardStatus = 'searching';
   private plan: Plan | null = null;
   private week: WeekModel | null = null;
@@ -225,6 +229,35 @@ export class Board {
     hitPad(this.moveButton.mesh, LAYOUT.move.w, LAYOUT.move.h, px(14), px(12));
     hitPad(this.voiceButton.mesh, LAYOUT.voice.w, LAYOUT.voice.h, px(6), px(12));
     this.setVoiceButton(true, false);
+
+    // Palm cue: label + progress ring, hidden until you hold a palm toward your face.
+    this.palmLabel.draw((c, w, h) => {
+      roundRect(c, 2, 2, w - 4, h - 4, (h - 4) / 2);
+      c.fillStyle = 'rgba(16, 28, 46, 0.92)';
+      c.fill();
+      c.lineWidth = 3;
+      c.strokeStyle = COLORS.link;
+      c.stroke();
+      const t = 'Hold to bring the board here';
+      let size = 26;
+      font(c, size, 700);
+      while (size > 12 && c.measureText(t).width > w - 28) font(c, --size, 700);
+      c.fillStyle = COLORS.text;
+      c.textBaseline = 'middle';
+      c.fillText(t, (w - c.measureText(t).width) / 2, h / 2 + 1);
+    });
+    // Drawn at 0.26 m and shown at half size (13 cm): twice the pixels, so it stays sharp ~30 cm from the eyes.
+    this.palmLabel.mesh.scale.setScalar(0.5);
+    this.palmLabel.mesh.position.set(0, 0.038, 0);
+    this.palmLabel.mesh.renderOrder = 9;
+    this.palmRing = new Mesh(
+      new RingGeometry(0.016, 0.022, RING_SEGMENTS, 1, Math.PI / 2, Math.PI * 2),
+      new MeshBasicMaterial({ color: COLORS.link, side: DoubleSide, transparent: true, depthWrite: false }),
+    );
+    this.palmRing.scale.x = -1;
+    this.palmRing.renderOrder = 9;
+    this.palm.add(this.palmLabel.mesh, this.palmRing);
+    this.palm.visible = false;
 
     // Desk: glow behind the invite, the invite, and the ring in front.
     this.add(this.desk, this.glow.mesh, 0, 0, -0.002, 2);
@@ -331,6 +364,15 @@ export class Board {
     if (key === this.voiceLook) return;
     this.voiceLook = key;
     this.voiceButton.draw((c, w, h) => drawButton(c, w, h, on ? '🔊' : '🔇', false, hovered, 26));
+  }
+
+  /** Show the palm cue at a point, turned to face the eyes, with the ring filled to `progress`. */
+  setPalmCue(visible: boolean, at?: { x: number; y: number; z: number }, head?: { x: number; y: number; z: number }, progress = 0): void {
+    this.palm.visible = visible;
+    if (!visible || !at || !head) return;
+    this.palm.position.set(at.x, at.y, at.z);
+    this.palm.lookAt(head.x, head.y, head.z);
+    this.palmRing.geometry.setDrawRange(0, Math.round(RING_SEGMENTS * Math.max(0.02, progress)) * 6);
   }
 
   /** Test hook: is the "start here" glow showing? */

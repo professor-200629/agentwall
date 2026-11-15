@@ -71,6 +71,8 @@ cli(['browser', 'reload']);
 await sleep(3000);
 hook('resetDemo');
 hook('setWatch', false);
+// Emulator commands take ~1.4 s each on this laptop: give the 15 s late-wall window room.
+hook('setLateWallSeconds', 90);
 let b = hook('board');
 check('desktop: board visible as a preview before XR', hook('state') === 'idle' && b.visible, `pos=${fmt(b.position)}`);
 
@@ -95,7 +97,10 @@ look(0);
 hook('simulateNoPlanes', true);
 hook('restart');
 await sleep(1000);
-check('no planes: still searching before 2.5 s', hook('state') === 'searching', hook('state'));
+// Timed inside the app, so slow emulator commands cannot make this flaky.
+const st = hook('state');
+const age = hook('placementAge');
+check('no planes: still searching before 2.5 s (never floats early)', st === 'searching' || (st === 'fallback' && age >= 2.5), `${st} after ${age.toFixed(1)} s`);
 await sleep(2500);
 b = hook('board');
 check('no planes: fallback 1.2 m in front at eye height', hook('placement')?.kind === 'fallback' && Math.abs(b.position[2] + 1.2) < 0.05 && Math.abs(b.position[1] - 1.2) < 0.05, `pos=${fmt(b.position)}`);
@@ -396,7 +401,7 @@ check('the hidden Re-plan button does not catch the ray (IWSDK skips hidden obje
 
 // "No way for me to adjust the position of the board": Move board, then look where you want it.
 const startPos = hook('board').position;
-hook('setMoveSeconds', 12); // emulator commands take ~1 s each
+hook('setMoveSeconds', 20); // emulator commands take ~1.4 s each
 await tap('move');
 check('pinching Move board starts a look-at-a-wall countdown', hook('flow').moving === true && /Look at the spot/.test(hook('interaction').agentLine), hook('interaction').agentLine);
 look(30);
@@ -480,7 +485,7 @@ look(0);
 hook('restart');
 await sleep(2000);
 hook('resetDemo');
-hook('setFlySlowdown', 10); // 9 s flight, so the slow emulator commands can sample it mid-air
+hook('setFlySlowdown', 16); // 14 s flight, so the slow emulator commands can sample it mid-air
 await tap('chip:task');
 const m0 = hook('mural');
 let sawHidden = !hook('desk')?.visible || m0.flying; // not resting on the desk yet: hidden, or still in the air
@@ -495,7 +500,7 @@ for (let i = 0; i < 40; i++) {
   } else if (flewFor > 0) break;
   else await sleep(200);
 }
-await waitIdle(12000);
+await waitIdle(20000);
 const rest = hook('desk');
 const restNow = hook('mural').deskNow;
 check('right after asking, the invite is not resting on the desk yet (hidden or flying)', sawHidden, `hidden=${sawHidden}`);
@@ -586,6 +591,43 @@ await waitIdle();
 plan = hook('plan');
 check('back to the meeting task: a fresh plan without the focus rule (Tue 1:00 PM)', plan?.task !== 'Block 2 hours of focus time' && plan.slot?.id === '2026-11-17T13:00' && JSON.stringify(plan.constraint) === '{}', `${plan?.task} ${plan?.slot?.id} ${JSON.stringify(plan?.constraint)}`);
 hook('setUnsendSeconds', 5);
+
+// ---------- 22. Palm toward your face for a second: the board comes to you ----------
+look(0);
+hook('restart');
+await sleep(2000);
+const palmUp = { pitch: 60, yaw: 0, roll: 180 }; // emulator hand turned over: palm toward the face, fingers up
+const handAt = (orientation) => xr('set-transform', { device: 'hand-right', position: { x: 0.05, y: 1.1, z: -0.3 }, orientation });
+const spotBefore = hook('board').position;
+// Aiming straight down at the desk card must never send the board away.
+handAt({ pitch: -90, yaw: 0, roll: 0 });
+await sleep(1800);
+check('a hand pointing down at the desk (not a palm-up) never calls the board', dist3(hook('board').position, spotBefore) < 0.01 && hook('palm').cue === false, JSON.stringify(hook('palm').hands.find((h) => h.hand === 'right')));
+// Palm up + pinch is Quest's own system gesture: leave it alone.
+handAt(palmUp);
+pinchValue(1);
+await sleep(1800);
+check("palm up WITH a pinch (Quest's system menu gesture) does nothing here", dist3(hook('board').position, spotBefore) < 0.01, JSON.stringify(hook('palm').hands.find((h) => h.hand === 'right')));
+pinchValue(0);
+handAt({ pitch: 0, yaw: 0, roll: 0 });
+await sleep(400);
+look(30); // look somewhere else, then hold an open palm toward the face
+hook('setPalmHoldSeconds', 5); // slow the ring down so the emulator can see it filling
+handAt(palmUp);
+await sleep(500);
+const pc = hook('palm');
+hook('setPalmHoldSeconds', 1);
+handAt({ pitch: 0, yaw: 0, roll: 0 }); // let go, then hold for the real 1 s
+await sleep(400);
+handAt(palmUp);
+check('holding an open palm toward your face shows the "bring board here" ring', pc.cue === true && pc.progress > 0, JSON.stringify(pc));
+await sleep(2500);
+const spotAfter = hook('board').position;
+check('after a second the board comes to where you look', dist3(spotAfter, spotBefore) > 0.5 && /Board came to you/.test(hook('interaction').agentLine), `moved ${dist3(spotAfter, spotBefore).toFixed(2)} m | ${hook('interaction').agentLine}`);
+handAt({ pitch: 0, yaw: 0, roll: 0 });
+look(0);
+hook('restart');
+await sleep(1500);
 
 look(0, -10);
 console.log(`\n${results.filter(Boolean).length}/${results.length} passed`);

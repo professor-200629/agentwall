@@ -6,16 +6,19 @@ and nothing goes out until you pinch and hold to approve.
 Entry for the Meta VR Start Developer Competition 2026 (Productivity track).
 Built with Meta's [Immersive Web SDK](https://iwsdk.dev) (WebXR), hands only.
 
-**Status: 15 Nov.** Real AI connected. **First real Quest 3 test done** (by
-steve40 on the Meta forum): pinch-and-hold, the ring and the chime worked; the
-board placement, recentering and aiming problems found there are fixed (see
-"Fixes from the first Quest test" below) and re-tested in the emulator. **Have a Quest? Please try the 10-step
+**Status: 15 Nov.** Real AI connected. **Tested on a real Quest 3** by steve40
+(Meta forum): after the fixes below he wrote "Cool, it's perfect now". The
+features added later the same day (flight to the desk, next steps, voice, focus
+time, palm-up summon) are tested in Meta's Quest 3 emulator, not yet on a
+headset. **Have a Quest? Please try the 10-step
 checklist: [docs/TESTING-ON-QUEST.md](docs/TESTING-ON-QUEST.md).**
 
 1. The app finds a wall and puts the board on it (or floats it 1.2 m in front
    of you if there is no wall).
 2. **Ask the agent** by pinching a chip ("Find time + draft invite", "Only after
-   4 PM", "Thursday", "Not Wed", "Any time") or pinch **🎤 Speak** and say it.
+   4 PM", "Thursday", "Not Wed", "🎯 Focus 2 h") or pinch **🎤 Speak** and say it
+   ("any time" clears your rules). The agent says its answer out loud in one short
+   sentence (🔊 turns the voice off; silent where the browser has no voice).
 3. **The week mural:** the agent sweeps Mon–Fri across your wall. Every time it
    can't use is struck out with the reason (you busy, Sam busy, too close to a
    meeting, your rule). One slot lights up gold; the runner-ups are outlined,
@@ -26,11 +29,15 @@ checklist: [docs/TESTING-ON-QUEST.md](docs/TESTING-ON-QUEST.md).**
    rule") and pinch to remove that rule, and the agent re-plans in front of
    you; pinch a busy block and the board says why it can't be used. Your rules
    are saved and come back next time.
-4. **The decision tray:** the invite lands on your real table (or just above
-   your lap if there is no table in reach). **Pinch and hold it for 1 second**
+4. **The decision tray:** the invite lifts off the gold slot on the wall and
+   **flies down to your real table** (or just above your lap if there is no
+   table in reach). **Pinch and hold it for 1 second**
    to approve. You get **5 seconds to Unsend** (pinch again), then it goes to
    the **Demo outbox** with a receipt that says which part came from your
    rules, the AI and you. Nothing is really sent.
+   **The agent's next step:** it then offers, one at a time, a 10-minute prep
+   block before the call (green on your week) and a reminder to Sam an hour
+   before. Each needs your pinch; it never adds anything on its own.
 5. **The agent keeps watch:** a few seconds later a SAMPLE change lands on the
    approved time ("Dentist"). The mural shows it in red, the invite shows the
    conflict, and a **Re-plan?** card appears. Re-planning moves the invite to a
@@ -39,7 +46,14 @@ checklist: [docs/TESTING-ON-QUEST.md](docs/TESTING-ON-QUEST.md).**
    Next time you enter looking about the same way, it comes back to the same
    spot ("BACK ON YOUR WALL"); look clearly elsewhere and it centres on your
    view instead. Pinch **⤢ Move board** and look at a wall to put it somewhere
-   else. The plan and the demo outbox are saved in your browser too.
+   else. **Palm up to call it:** hold either open hand with the palm toward your
+   face for a second (a ring fills) and the board comes to where you look.
+   (Quest's own system gesture is palm up *and pinch*, so a pinch never counts.)
+   The plan and the demo outbox are saved in your browser too.
+7. **A second task, same agent:** pinch **🎯 Focus 2 h** and the agent finds two
+   free hours on *your* calendar only (in the sample week only Thursday has
+   room), shows them on the week and puts a **calendar block** on your desk to
+   hold-approve. Rules work the same way.
 
 Screenshots from Meta's Quest 3 emulator (IWER), not a real headset:
 
@@ -54,6 +68,8 @@ Screenshots from Meta's Quest 3 emulator (IWER), not a real headset:
 | ![Remove a rule](docs/screenshots/wall-touch-remove-rule.png) | ![Pick a time](docs/screenshots/wall-touch-pick-time.png) |
 | **Next session, another seat: same spot** | **Move board button, cursor anywhere on the board** |
 | ![Back on your wall](docs/screenshots/wall-back-same-spot.png) | ![Move board](docs/screenshots/wall-move-button-cursor.png) |
+| **Palm toward your face: the board comes to you** | **Focus 2 h: a calendar block on the desk** |
+| ![Palm up](docs/screenshots/palm-bring-board.png) | ![Focus block](docs/screenshots/desk-focus-block.png) |
 
 All calendar data is **sample data** (`src/data/sample-calendar.json`). Nothing
 reads a real calendar and nothing is sent.

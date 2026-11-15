@@ -64,6 +64,7 @@ import { focusTradeOff, focusWindows, isFocus } from './logic/focus.js';
 import { nextSteps, prepBlock, reminderItem, type NextStep, type NextStepKind } from './logic/next-step.js';
 import type { WeekBlock } from './logic/week.js';
 import type { AgentCardView } from './board.js';
+import { palmNormal, PalmSummon, palmTowardFace, type P3 } from './logic/palm.js';
 import { lineFor, type SpokenMoment } from './logic/lines.js';
 import { setSpeechEnabled, speak, speechEnabled, stopSpeaking } from './ui/voice-out.js';
 import { playApproved, playTick, unlockAudio } from './ui/sound.js';
@@ -126,7 +127,7 @@ type AgentCard = AgentCardView & { kind: 'replan' | NextStepKind };
 /** Seconds to look at the new spot after pinching "Move board". */
 export const MOVE_SECONDS = 3;
 
-type PlacementRequest = { useMemory: boolean; anyAngle?: boolean; why?: 'move' | 'recenter' };
+type PlacementRequest = { useMemory: boolean; anyAngle?: boolean; why?: 'move' | 'recenter' | 'summon' };
 
 export interface AgentWallDebug {
   state: () => string;
@@ -171,9 +172,15 @@ export interface AgentWallDebug {
   muralPoint: (dayIndex: number, minute: number) => [number, number, number] | null;
   weekCells: () => Array<{ day: string; start: number; kind: string; reason: string }>;
   setMoveSeconds: (seconds: number) => void;
+  setLateWallSeconds: (seconds: number) => void;
+  /** Seconds since the placement controller last started. */
+  placementAge: () => number;
   setFlySlowdown: (k: number) => void;
   /** The agent's last spoken line. */
   spoken: () => string;
+  setPalmHoldSeconds: (seconds: number) => void;
+  /** Palm-up summon state (per hand: angle to the face, distance, pinch gap). */
+  palm: () => { hands: Array<{ hand: string; angle: number; dist: number; pinch: number; facing: boolean }>; progress: number; cue: boolean; ms: number };
   /** Test hook: turn the automatic sample change on/off (off keeps long test runs predictable). */
   setWatch: (on: boolean) => void;
   /** Test hook: what the mic would have heard (the emulator has no microphone). */
@@ -288,6 +295,11 @@ export class BoardSystem extends createSystem({
   private cardShownAt = 0;
   /** Next-step offers still to show, in order. */
   private steps: NextStep[] = [];
+  /** Palm toward your face for a second: the board comes to you. */
+  private palmSummon = new PalmSummon();
+  /** Smoothed cost of the palm check per frame (ms), for the test hook. */
+  private palmMs = 0;
+  private palmDebug: Array<{ hand: string; angle: number; dist: number; pinch: number; facing: boolean }> = [];
   /** The agent's last spoken line (also kept when the device has no voice). */
   private lastSpoken = '';
   /** The prep block you said yes to (shown on the week; belongs to the call). */
@@ -303,6 +315,7 @@ export class BoardSystem extends createSystem({
     this.board = new Board();
     const boardEntity = this.world.createTransformEntity(this.board.object);
     const deskEntity = this.world.createTransformEntity(this.board.desk);
+    this.world.createTransformEntity(this.board.palm);
     const interactive = (mesh: Parameters<typeof this.world.createTransformEntity>[0], parent: Entity) => {
       const e = this.world.createTransformEntity(mesh, { parent });
       e.addComponent(RayInteractable);
@@ -439,6 +452,9 @@ export class BoardSystem extends createSystem({
     this.attachReset();
     this.voice.tick();
     this.updateInteraction(delta);
+    const palmT0 = performance.now();
+    this.updatePalm(delta);
+    this.palmMs = this.palmMs * 0.95 + (performance.now() - palmT0) * 0.05;
     this.updateTimers();
     this.drawChips();
     this.renderBoard();
@@ -475,6 +491,72 @@ export class BoardSystem extends createSystem({
     this.pendingRequest = req;
     this.pendingStart = true;
     this.placingFor = req.why ?? null;
+  }
+
+  /**
+   * Palm-up summon. Reads WebXR hand joints (wrist, index and pinky knuckles,
+   * thumb and index tips) in the session's reference space; the board lives in the
+   * same space (the player rig is never moved in this app).
+   */
+  private updatePalm(delta: number): void {
+    const session = this.xrManager.getSession();
+    const frame = this.xrManager.getFrame();
+    const ref = this.xrManager.getReferenceSpace();
+    this.palmDebug = [];
+    if (!session || !frame || !ref || !this.board.object.visible) {
+      this.palmSummon.update(delta, false);
+      this.board.setPalmCue(false);
+      return;
+    }
+    const head = frame.getViewerPose(ref)?.transform.position;
+    let facingAt: { at: P3; normal: P3 } | null = null;
+    for (const src of session.inputSources) {
+      const hand = src.hand;
+      if (!hand || !head || (src.handedness !== 'left' && src.handedness !== 'right')) continue;
+      const joint = (name: XRHandJoint): P3 | null => {
+        const space = hand.get(name);
+        const pose = space ? frame.getJointPose?.(space, ref) : undefined;
+        return pose ? pose.transform.position : null;
+      };
+      const wrist = joint('wrist');
+      const indexK = joint('index-finger-metacarpal');
+      const pinkyK = joint('pinky-finger-metacarpal');
+      const thumbTip = joint('thumb-tip');
+      const indexTip = joint('index-finger-tip');
+      const middleK = joint('middle-finger-metacarpal');
+      if (!wrist || !indexK || !pinkyK || !thumbTip || !indexTip || !middleK) continue;
+      const normal = palmNormal(wrist, indexK, pinkyK, src.handedness);
+      const at = {
+        x: (wrist.x + indexK.x + pinkyK.x) / 3,
+        y: (wrist.y + indexK.y + pinkyK.y) / 3,
+        z: (wrist.z + indexK.z + pinkyK.z) / 3,
+      };
+      const fingers = { x: middleK.x - wrist.x, y: middleK.y - wrist.y, z: middleK.z - wrist.z };
+      const facing = palmTowardFace(at, normal, head, thumbTip, indexTip, fingers);
+      const toHead = { x: head.x - at.x, y: head.y - at.y, z: head.z - at.z };
+      const dist = Math.hypot(toHead.x, toHead.y, toHead.z);
+      const cos = (normal.x * toHead.x + normal.y * toHead.y + normal.z * toHead.z) / (dist || 1);
+      this.palmDebug.push({
+        hand: src.handedness,
+        angle: Math.round((Math.acos(Math.max(-1, Math.min(1, cos))) * 180) / Math.PI),
+        dist: Math.round(dist * 100) / 100,
+        pinch: Math.round(Math.hypot(thumbTip.x - indexTip.x, thumbTip.y - indexTip.y, thumbTip.z - indexTip.z) * 1000) / 1000,
+        facing,
+      });
+      if (facing) facingAt = { at, normal };
+    }
+    const event = this.palmSummon.update(delta, facingAt !== null && !this.inviteHeld);
+    if (event === 'charging' && facingAt && head) {
+      const n = facingAt.normal;
+      const cue = { x: facingAt.at.x + n.x * 0.07, y: facingAt.at.y + n.y * 0.07, z: facingAt.at.z + n.z * 0.07 };
+      this.board.setPalmCue(true, cue, head, this.palmSummon.progress);
+    } else {
+      this.board.setPalmCue(false);
+    }
+    if (event === 'summon') {
+      this.requestPlacement({ useMemory: false, why: 'summon' });
+      playTick();
+    }
   }
 
   /** The agent says one short line (silent if the device has no voice, or the mic is on). */
@@ -991,6 +1073,9 @@ export class BoardSystem extends createSystem({
           : 'No wall found · run Space Setup in Quest settings to pin the board to a wall',
         'warn',
       );
+    } else if (why === 'summon') {
+      this.say('Board came to you · palm up any time to call it again', 'ok');
+      this.speakLine('Here you go.');
     } else if (why === 'move') {
       this.say('Board moved · it comes back here next time', 'ok');
       this.speakMoment({ kind: 'moved' });
@@ -1134,6 +1219,10 @@ export class BoardSystem extends createSystem({
       recenter: () => {
         this.onReset();
       },
+      setLateWallSeconds: (seconds) => {
+        this.controller.lateWallSeconds = seconds;
+      },
+      placementAge: () => this.controller.age(this.clockS),
       setMoveSeconds: (seconds) => {
         this.moveSeconds = seconds;
       },
@@ -1141,6 +1230,10 @@ export class BoardSystem extends createSystem({
         this.board.flySlowdown = k;
       },
       spoken: () => this.lastSpoken,
+      setPalmHoldSeconds: (seconds) => {
+        this.palmSummon = new PalmSummon(seconds);
+      },
+      palm: () => ({ hands: this.palmDebug, progress: this.palmSummon.progress, cue: this.board.palm.visible, ms: this.palmMs }),
       watchNow: () => {
         this.watchAt = null;
         this.fireWatch();
