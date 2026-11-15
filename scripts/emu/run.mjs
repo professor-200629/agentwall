@@ -498,6 +498,31 @@ check('then it flies: mid-air it is above its desk spot', !!mid && mid[1] > rest
 check('and lands exactly on its desk spot, ready to hold', rest.visible && dist3(restNow, rest.position) < 0.005 && !hook('mural').sweeping, `off by ${dist3(restNow, rest.position).toFixed(4)} m`);
 hook('setFlySlowdown', 1);
 
+// ---------- 18. The agent's next step: prep block, then reminder (each needs your pinch) ----------
+look(0);
+hook('restart');
+await sleep(2000);
+hook('resetDemo');
+hook('setWatch', false);
+hook('setUnsendSeconds', 2);
+await tap('chip:task');
+await waitIdle();
+aim('invite');
+await sleep(300);
+pinchValue(1);
+await sleep(1800);
+pinchValue(0);
+await sleep(4000); // the 2 s Unsend window passes
+let nf = hook('flow');
+check('after sending, the agent offers a next step: a 10-min prep block', nf.card === 'prep' && nf.sendingLeft === null, JSON.stringify(nf));
+await tap('replan:yes');
+nf = hook('flow');
+check('yes adds the prep block to your week, then the agent offers a reminder', nf.prep === true && nf.card === 'remind' && /Prep block added/.test(hook('interaction').agentLine), `${JSON.stringify(nf)} | ${hook('interaction').agentLine}`);
+const outboxBefore = hook('outbox').length;
+await tap('replan:no');
+check('no to the reminder: nothing added, the card goes away', hook('outbox').length === outboxBefore && hook('flow').card === null && /no reminder/.test(hook('interaction').agentLine), hook('interaction').agentLine);
+hook('setUnsendSeconds', 5);
+
 look(0, -10);
 console.log(`\n${results.filter(Boolean).length}/${results.length} passed`);
 process.exit(results.every(Boolean) ? 0 : 1);

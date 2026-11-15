@@ -103,11 +103,20 @@ export const FLY = { newPlanSeconds: 0.9, pickSeconds: 0.55, arc: 0.22, startSca
 
 const easeInOut = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2);
 
+/** The agent's card on the wall: a conflict (re-plan?) or a next-step offer. */
+export interface AgentCardView {
+  title: string;
+  text: string;
+  yes: string;
+  no: string;
+  tone: 'warn' | 'next';
+}
+
 export interface BoardView {
   plan: Plan | null;
   week: WeekModel | null;
   invite: InviteExtras;
-  replanText: string | null;
+  card: AgentCardView | null;
   fresh: Set<string>;
 }
 
@@ -140,7 +149,8 @@ export class Board {
   private agentLine = { text: '', color: COLORS.muted };
   private invitePlan: Plan | null = null;
   private inviteKey = '';
-  private replanText: string | null = null;
+  private card: AgentCardView | null = null;
+  private cardKey = '';
   private hoverInvite = false;
   private hoverAlt: number | null = null;
   private hoverReplan: number | null = null;
@@ -238,6 +248,13 @@ export class Board {
     this.setOutbox([]);
     this.object.visible = false;
     this.drawBack();
+  }
+
+  private drawCardButtons(hover: number | null): void {
+    const yes = this.card?.yes ?? 'Re-plan';
+    const no = this.card?.no ?? 'Not now';
+    this.replanButtons[0].draw((c, w, h) => drawButton(c, w, h, yes, true, hover === 0));
+    this.replanButtons[1].draw((c, w, h) => drawButton(c, w, h, no, false, hover === 1));
   }
 
   /** What the hand ray is over on the week (redraws the mural only when it changes). */
@@ -362,13 +379,19 @@ export class Board {
     }
 
     // Re-plan card.
-    if (view.replanText !== this.replanText) {
-      this.replanText = view.replanText;
-      const text = view.replanText;
-      const show = text !== null;
+    const cardKey = view.card ? JSON.stringify(view.card) : '';
+    if (cardKey !== this.cardKey) {
+      this.cardKey = cardKey;
+      const card = view.card;
+      this.card = card;
+      const show = card !== null;
       this.replanPanel.mesh.visible = show;
       this.replanButtons.forEach((b) => (b.mesh.visible = show));
-      if (text) this.replanPanel.draw((c, w, h) => drawReplanCard(c, w, h, text));
+      if (card) {
+        this.replanPanel.draw((c, w, h) => drawAgentCard(c, w, h, card));
+        this.hoverReplan = null;
+        this.drawCardButtons(null);
+      }
     }
   }
 
@@ -401,8 +424,7 @@ export class Board {
     }
     if (replan !== this.hoverReplan) {
       this.hoverReplan = replan;
-      this.replanButtons[0].draw((c, w, h) => drawButton(c, w, h, 'Re-plan', true, replan === 0));
-      this.replanButtons[1].draw((c, w, h) => drawButton(c, w, h, 'Not now', false, replan === 1));
+      this.drawCardButtons(replan);
     }
   }
 
@@ -657,17 +679,18 @@ function drawButton(
   c.textBaseline = 'alphabetic';
 }
 
-function drawReplanCard(c: CanvasRenderingContext2D, w: number, h: number, text: string): void {
+function drawAgentCard(c: CanvasRenderingContext2D, w: number, h: number, card: AgentCardView): void {
+  const warn = card.tone === 'warn';
   roundRect(c, 3, 3, w - 6, h - 6, 22);
-  c.fillStyle = 'rgba(40, 22, 22, 0.97)';
+  c.fillStyle = warn ? 'rgba(40, 22, 22, 0.97)' : 'rgba(16, 28, 46, 0.97)';
   c.fill();
   c.lineWidth = 4;
-  c.strokeStyle = '#e5534b';
+  c.strokeStyle = warn ? '#e5534b' : '#7fb2ff';
   c.stroke();
   font(c, 18, 800);
-  c.fillStyle = '#ff9a90';
-  c.fillText('AGENT NOTICED A CONFLICT', 24, 34);
+  c.fillStyle = warn ? '#ff9a90' : '#9cc4ff';
+  c.fillText(card.title, 24, 34);
   font(c, 22, 600);
   c.fillStyle = COLORS.text;
-  drawWrapped(c, text, 24, 66, w * 0.55, 28, 2);
+  drawWrapped(c, card.text, 24, 66, w * 0.55, 28, 2);
 }

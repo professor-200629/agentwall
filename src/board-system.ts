@@ -60,6 +60,9 @@ import { restore, serialize, STORAGE_KEY } from './logic/storage.js';
 import { sampleChange, stillFree, WATCH_DELAY_SECONDS, withGuestBusy } from './logic/watch.js';
 import { tradeOff, weekModel, type WeekModel } from './logic/week.js';
 import { muralAction, withoutRule, type MuralAction } from './logic/touch-week.js';
+import { nextSteps, prepBlock, reminderItem, type NextStep, type NextStepKind } from './logic/next-step.js';
+import type { WeekBlock } from './logic/week.js';
+import type { AgentCardView } from './board.js';
 import { playApproved, playTick, unlockAudio } from './ui/sound.js';
 import type { InviteExtras } from './ui/cards.js';
 import { VoiceInput } from './voice.js';
@@ -109,6 +112,11 @@ type Press =
   | { kind: 'invite' | 'move'; index: 0 }
   | { kind: 'mural'; index: 0; u: number; v: number };
 
+/** A next-step offer nobody answers is skipped after this many seconds, so the demo moves on. */
+const NEXT_STEP_TIMEOUT = 25;
+
+type AgentCard = AgentCardView & { kind: 'replan' | NextStepKind };
+
 /** Seconds to look at the new spot after pinching "Move board". */
 export const MOVE_SECONDS = 3;
 
@@ -149,7 +157,7 @@ export interface AgentWallDebug {
   /** The week mural: sweep still playing? how many half hours ruled out? */
   mural: () => { visible: boolean; sweeping: boolean; ruledOut: number; fresh: number };
   /** Unsend window and conflict state. */
-  flow: () => { sendingLeft: number | null; conflict: string | null; replan: boolean; watchFired: boolean; clock: number; moving: boolean };
+  flow: () => { sendingLeft: number | null; conflict: string | null; replan: boolean; watchFired: boolean; clock: number; moving: boolean; card: string | null; prep: boolean };
   /** Test hook: fire the agent's sample change now (instead of 8 s after the first send). */
   watchNow: () => void;
   /** Same path as Quest's recenter (XRReferenceSpace 'reset'). */
@@ -266,7 +274,13 @@ export class BoardSystem extends createSystem({
   private watchAt: number | null = null;
   private watchFired = false;
   private conflict: string | null = null;
-  private replanText: string | null = null;
+  /** The agent's card on the wall: a conflict to re-plan, or a next-step offer. */
+  private card: AgentCard | null = null;
+  private cardShownAt = 0;
+  /** Next-step offers still to show, in order. */
+  private steps: NextStep[] = [];
+  /** The prep block you said yes to (shown on the week; belongs to the call). */
+  private prep: WeekBlock | null = null;
   private fresh = new Set<string>();
   private deskPlace: DeskPlacement | null = null;
   /** A pinch that started on the invite and has not been released yet. */
@@ -458,10 +472,12 @@ export class BoardSystem extends createSystem({
 
   private currentWeek(): WeekModel | null {
     if (!this.plan) return null;
-    const key = JSON.stringify([this.plan.constraint, this.cal.busy.guest.length]);
+    const key = JSON.stringify([this.plan.constraint, this.cal.busy.guest.length, this.prep]);
     if (key !== this.weekKey) {
       this.weekKey = key;
-      this.week = weekModel(this.cal, this.plan.constraint);
+      const week = weekModel(this.cal, this.plan.constraint);
+      // The agent's prep block is shown, but never counts against the call it belongs to.
+      this.week = this.prep ? { ...week, blocks: [...week.blocks, this.prep] } : week;
     }
     return this.week;
   }
@@ -490,7 +506,7 @@ export class BoardSystem extends createSystem({
         plan: this.plan,
         week: this.currentWeek(),
         invite: this.inviteExtras(),
-        replanText: this.replanText,
+        card: this.card ? { title: this.card.title, text: this.card.text, yes: this.card.yes, no: this.card.no, tone: this.card.tone } : null,
         fresh: this.fresh,
       },
       this.animateNext,
@@ -560,12 +576,8 @@ export class BoardSystem extends createSystem({
           playTick();
         }
       } else if (press.kind === 'replan') {
-        if (this.replanText === null || this.busy) continue;
-        if (press.index === 0) void this.replan();
-        else {
-          this.replanText = null;
-          this.say('Okay · the conflict stays flagged on the card', 'muted');
-        }
+        if (this.card === null || this.busy) continue;
+        this.answerCard(press.index === 0);
       } else if (press.kind === 'invite' && this.sendingUntil !== null) {
         this.unsend();
       } else if (press.kind === 'mural') {
@@ -713,15 +725,66 @@ export class BoardSystem extends createSystem({
       this.save();
       this.say('In the demo outbox · nothing was really sent', 'ok');
       playTick();
-      if (this.watchEnabled && !this.watchFired && this.watchAt === null) {
-        this.watchAt = this.clockS + WATCH_DELAY_SECONDS;
-      }
+      // The agent's next steps, one at a time, each needing your pinch.
+      this.steps = this.plan.slot ? nextSteps(this.cal, this.plan.slot) : [];
+      this.nextCard();
+    }
+    // A next-step offer nobody answers is skipped, so the demo keeps moving.
+    if (this.card && this.card.kind !== 'replan' && this.clockS - this.cardShownAt > NEXT_STEP_TIMEOUT) {
+      this.say('No answer · the agent skipped that suggestion', 'muted');
+      this.nextCard();
     }
     // The agent keeps watch: the sample change lands once.
     if (this.watchAt !== null && this.clockS >= this.watchAt) {
       this.watchAt = null;
       this.fireWatch();
     }
+  }
+
+  /** Show the next offer, or (when none are left) start keeping watch. */
+  private nextCard(): void {
+    const step = this.steps.shift();
+    if (step) {
+      this.card = { ...step, tone: 'next' };
+      this.cardShownAt = this.clockS;
+      return;
+    }
+    this.card = null;
+    if (this.watchEnabled && !this.watchFired && this.watchAt === null) {
+      this.watchAt = this.clockS + WATCH_DELAY_SECONDS;
+    }
+  }
+
+  /** Your pinch on the agent card: yes (left button) or no (right). */
+  private answerCard(yes: boolean): void {
+    const card = this.card;
+    const slot = this.plan?.slot;
+    if (!card) return;
+    playTick();
+    if (card.kind === 'replan') {
+      if (yes) void this.replan();
+      else {
+        this.card = null;
+        this.say('Okay · the conflict stays flagged on the card', 'muted');
+      }
+      return;
+    }
+    if (card.kind === 'prep') {
+      this.prep = yes && slot ? prepBlock(this.cal, slot) : null;
+      this.weekKey = ''; // redraw the week with (or without) the prep block
+      this.say(yes ? 'Prep block added to your calendar · 10 min before the call' : 'Okay · no prep block', yes ? 'ok' : 'muted');
+    } else if (card.kind === 'remind') {
+      if (yes && slot) {
+        this.outbox = addToOutbox(this.outbox, reminderItem(this.cal, slot, new Date().toISOString()));
+        this.board.setOutbox(this.outbox);
+        this.save();
+      }
+      this.say(
+        yes ? `Reminder for ${this.cal.guest.name} is in the demo outbox · nothing was really sent` : 'Okay · no reminder',
+        yes ? 'ok' : 'muted',
+      );
+    }
+    this.nextCard();
   }
 
   /** The labelled SAMPLE change lands on the approved time; the agent flags it. */
@@ -735,14 +798,22 @@ export class BoardSystem extends createSystem({
     this.fresh = new Set([...this.fresh, `${slot.day}T${slot.start}`]);
     const when = shortWhen(slot.day, slot.start);
     this.conflict = `Conflict: ${this.cal.guest.name} is now busy ${when}`;
-    this.replanText = `${this.cal.guest.name} just added a dentist visit (SAMPLE change) at ${when}. Your approved invite no longer fits.`;
+    this.steps = [];
+    this.card = {
+      kind: 'replan',
+      title: 'AGENT NOTICED A CONFLICT',
+      text: `${this.cal.guest.name} just added a dentist visit (SAMPLE change) at ${when}. Your approved invite no longer fits.`,
+      yes: 'Re-plan',
+      no: 'Not now',
+      tone: 'warn',
+    };
     this.say('Agent noticed a conflict · re-plan?', 'warn');
     playTick();
   }
 
   /** Re-plan after a conflict: same rule, new time; always needs a fresh hold. */
   private async replan(): Promise<void> {
-    this.replanText = null;
+    this.card = null;
     const before = this.plan?.slot;
     const result = await this.ask(DEMO_TASK);
     if (result?.plan?.slot) {
@@ -787,6 +858,12 @@ export class BoardSystem extends createSystem({
       this.board?.setOutbox(this.outbox);
     }
     if (plan?.approval !== 'approved') this.currentItemId = null;
+    // A different time: the prep block and pending offers belonged to the old one.
+    if (plan?.slot?.id !== this.plan?.slot?.id) {
+      this.prep = null;
+      this.steps = [];
+      if (this.card && this.card.kind !== 'replan') this.card = null;
+    }
     this.plan = plan;
     if (save) this.save();
   }
@@ -980,7 +1057,9 @@ export class BoardSystem extends createSystem({
       flow: () => ({
         sendingLeft: this.sendingUntil !== null ? Math.max(0, this.sendingUntil - this.clockS) : null,
         conflict: this.conflict,
-        replan: this.replanText !== null,
+        replan: this.card?.kind === 'replan',
+        card: this.card?.kind ?? null,
+        prep: this.prep !== null,
         watchFired: this.watchFired,
         clock: this.clockS,
         moving: this.moveUntil !== null,
@@ -1038,7 +1117,9 @@ export class BoardSystem extends createSystem({
         this.outbox = [];
         this.cal = baseCalendar;
         this.conflict = null;
-        this.replanText = null;
+        this.card = null;
+        this.steps = [];
+        this.prep = null;
         this.fresh = new Set();
         this.sendingUntil = null;
         this.currentItemId = null;

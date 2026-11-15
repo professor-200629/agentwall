@@ -56,6 +56,7 @@ const PERSON = {
   you: { fill: 'rgba(95, 135, 210, 0.55)', line: 'rgba(140, 175, 240, 0.9)' },
   guest: { fill: 'rgba(160, 105, 200, 0.55)', line: 'rgba(200, 150, 240, 0.9)' },
 };
+const AGENT_BLOCK = { fill: 'rgba(70, 170, 120, 0.6)', line: 'rgba(120, 220, 160, 0.95)' };
 const STRIKE = 'rgba(255, 90, 80, 0.95)';
 const GOLD = '#f5c542';
 
@@ -154,7 +155,8 @@ export function drawMural(c: CanvasRenderingContext2D, w: number, h: number, v: 
     if (y1 <= y0) continue;
     const bw = g.colW - 12;
     const isFresh = v.fresh.has(`${b.day}T${b.start}`);
-    const p = PERSON[b.who];
+    // Blocks the agent added (with your yes) are green: "Prep (agent)".
+    const p = b.title.endsWith('(agent)') ? AGENT_BLOCK : PERSON[b.who];
     roundRect(c, x0, y0, bw, y1 - y0, 8);
     c.fillStyle = isFresh ? 'rgba(255, 90, 80, 0.55)' : p.fill;
     c.fill();
