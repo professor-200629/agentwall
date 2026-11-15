@@ -480,21 +480,26 @@ look(0);
 hook('restart');
 await sleep(2000);
 hook('resetDemo');
-hook('setFlySlowdown', 6); // 5.4 s flight, so the emulator commands can catch it mid-air
+hook('setFlySlowdown', 10); // 9 s flight, so the slow emulator commands can sample it mid-air
 await tap('chip:task');
 const m0 = hook('mural');
 let sawHidden = !hook('desk')?.visible || m0.flying; // not resting on the desk yet: hidden, or still in the air
+// Sample the card while it flies and keep the highest point (the arc starts at the wall).
 let mid = null;
-for (let i = 0; i < 30 && !mid; i++) {
+let flewFor = 0;
+for (let i = 0; i < 40; i++) {
   const m = hook('mural');
-  if (m.flying) mid = m.deskNow;
-  else await sleep(300);
+  if (m.flying) {
+    flewFor++;
+    if (!mid || m.deskNow[1] > mid[1]) mid = m.deskNow;
+  } else if (flewFor > 0) break;
+  else await sleep(200);
 }
 await waitIdle(12000);
 const rest = hook('desk');
 const restNow = hook('mural').deskNow;
 check('right after asking, the invite is not resting on the desk yet (hidden or flying)', sawHidden, `hidden=${sawHidden}`);
-check('then it flies: mid-air it is above its desk spot', !!mid && mid[1] > rest.position[1] + 0.05, `mid=${mid?.map((v) => v.toFixed(2))} rest y=${rest.position[1].toFixed(2)}`);
+check('then it flies: at its highest it is well above its desk spot', !!mid && mid[1] > rest.position[1] + 0.1, `highest=${mid?.map((v) => v.toFixed(2))} rest y=${rest.position[1].toFixed(2)} samples=${flewFor}`);
 check('and lands exactly on its desk spot, ready to hold', rest.visible && dist3(restNow, rest.position) < 0.005 && !hook('mural').sweeping, `off by ${dist3(restNow, rest.position).toFixed(4)} m`);
 hook('setFlySlowdown', 1);
 
@@ -522,6 +527,19 @@ const outboxBefore = hook('outbox').length;
 await tap('replan:no');
 check('no to the reminder: nothing added, the card goes away', hook('outbox').length === outboxBefore && hook('flow').card === null && /no reminder/.test(hook('interaction').agentLine), hook('interaction').agentLine);
 hook('setUnsendSeconds', 5);
+
+// ---------- 19. The agent says short lines (silent where the device has no voice) ----------
+look(0);
+hook('restart');
+await sleep(2000);
+hook('resetDemo');
+hook('setWatch', false);
+await tap('chip:task');
+await waitIdle();
+check('when it plans, the agent says the time in words', /^Tuesday at 1:00 PM works for you and Sam\./.test(hook('spoken')), hook('spoken'));
+await hook('heard', 'only after 4 PM');
+await waitIdle();
+check('a new rule, a new spoken time', /^Wednesday at 5:30 PM works for you and Sam\./.test(hook('spoken')), hook('spoken'));
 
 look(0, -10);
 console.log(`\n${results.filter(Boolean).length}/${results.length} passed`);
