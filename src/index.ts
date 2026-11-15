@@ -1,7 +1,33 @@
 import { VisibilityState, World } from '@iwsdk/core';
 import projectOptions from 'virtual:iwsdk-project';
 import { BoardSystem } from './board-system.js';
+import { freshUrl, needsReload, RELOAD_KEY } from './logic/version.js';
 import { unlockAudio } from './ui/sound.js';
+
+// Run the newest build even if the browser cached an older index.html.
+void (async () => {
+  try {
+    const res = await fetch(`version.json?t=${Date.now()}`, { cache: 'no-store' });
+    const deployed = res.ok ? ((await res.json()) as { build?: string }).build : undefined;
+    let tried: string | null = null;
+    try {
+      tried = sessionStorage.getItem(RELOAD_KEY);
+    } catch {
+      // storage blocked: still safe, needsReload compares against null
+    }
+    // Runs once at page load, before anyone can enter mixed reality.
+    if (deployed && needsReload(__AGENTWALL_BUILD__, deployed, tried)) {
+      try {
+        sessionStorage.setItem(RELOAD_KEY, deployed);
+      } catch {
+        return; // without the guard a reload could loop; keep the old build instead
+      }
+      location.replace(freshUrl(location.href, deployed));
+    }
+  } catch {
+    // offline or no version.json: keep running what we have
+  }
+})();
 
 World.create(
   document.getElementById('scene-container') as HTMLDivElement,

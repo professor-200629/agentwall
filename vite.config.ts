@@ -7,10 +7,29 @@
 
 import { iwsdkDev } from '@iwsdk/vite-plugin-dev';
 import { fileURLToPath } from 'node:url';
-import { defineConfig } from 'vite';
+import { defineConfig, type Plugin } from 'vite';
+
+/** Build id: the commit (GitHub Actions sets GITHUB_SHA), or 'dev' locally. */
+const BUILD = process.env.GITHUB_SHA?.slice(0, 7) ?? 'dev';
+
+/** Writes version.json next to index.html so a running page can see a newer deploy. */
+function versionFile(): Plugin {
+  return {
+    name: 'agentwall-version',
+    apply: 'build',
+    generateBundle() {
+      this.emitFile({
+        type: 'asset',
+        fileName: 'version.json',
+        source: JSON.stringify({ build: BUILD, builtAt: new Date().toISOString() }),
+      });
+    },
+  };
+}
 
 export default defineConfig({
-  plugins: [iwsdkDev()],
+  plugins: [iwsdkDev(), versionFile()],
+  define: { __AGENTWALL_BUILD__: JSON.stringify(BUILD) },
   server: { host: '0.0.0.0', port: 8081, open: false },
   build: {
     outDir: 'dist',

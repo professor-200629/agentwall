@@ -488,6 +488,11 @@ export class Board {
       font(c, 54, 700);
       c.fillStyle = COLORS.text;
       c.fillText('Agent Wall', 44, 86);
+      // Which build this is, so a tester can tell us what they ran.
+      font(c, 14, 500);
+      c.fillStyle = COLORS.faint;
+      const build = `build ${__AGENTWALL_BUILD__}`;
+      c.fillText(build, W - 44 - c.measureText(build).width, H - 12);
       pill(c, s.chip, W - 44, 46, s.color, COLORS.ink, 20, true);
 
       font(c, 28, 500);
