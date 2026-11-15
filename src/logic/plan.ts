@@ -9,6 +9,7 @@
  *
  * Plain TypeScript, no XR. Plans are immutable: every change returns a new one.
  */
+import { focusBlock, isFocus } from './focus.js';
 import {
   clock,
   clockRange,
@@ -102,7 +103,7 @@ export function makePlan(
   let invite = slot ? draftInvite(cal, slot) : null;
   if (invite && opts.body) invite = { ...invite, body: opts.body, source: 'ai' };
   return {
-    task: previous?.task ?? DEMO_TASK,
+    task: DEMO_TASK, // makePlan is the meeting planner (focus.ts makes focus plans)
     constraint,
     constraintText,
     slot,
@@ -130,7 +131,7 @@ export function chooseSlot(cal: CalendarData, plan: Plan, slot: Slot): Plan {
     slot,
     alternatives,
     reason: 'You picked this time.',
-    invite: draftInvite(cal, slot),
+    invite: isFocus(plan) ? focusBlock(cal, slot) : draftInvite(cal, slot),
     approval: 'needs',
     version: plan.version + 1,
     by: 'you',
@@ -191,7 +192,7 @@ export function buildReceipt(
       ? { tag: 'YOU', text: `You picked ${pick}.` }
       : plan.by === 'ai'
         ? { tag: 'AI', text: `Picked ${pick}${plan.invite?.source === 'ai' ? ' and wrote the email' : ''}.` }
-        : { tag: 'RULES', text: `Picked ${pick} and wrote the email.` };
+        : { tag: 'RULES', text: `Picked ${pick} and ${isFocus(plan) ? 'drafted the calendar block' : 'wrote the email'}.` };
   return [
     { tag: 'RULES', text: `Read the sample week (${first.short.split(' ')[0]} ${first.short.split(' ')[1]}–${last.short.split(' ')[0]} ${last.short.split(' ')[1]} ${last.short.split(' ')[2]}).` },
     { tag: 'RULES', text: `Ruled out ${ruledOut} half hours: busy, too soon or your rule.` },

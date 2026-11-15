@@ -3,6 +3,7 @@
  * other). Each chip just "says" a sentence; the same text goes through the
  * AI or the rules, exactly like a voice transcript.
  */
+import { FOCUS_TASK } from './logic/focus.js';
 import { DEMO_TASK } from './logic/plan.js';
 
 export interface Chip {
@@ -17,7 +18,8 @@ export const CHIPS: Chip[] = [
   { id: 'after4', label: 'Only after 4 PM', say: 'only after 4 PM' },
   { id: 'thu', label: 'Thursday', say: 'Thursday only' },
   { id: 'notwed', label: 'Not Wed', say: 'not Wednesday' },
-  { id: 'any', label: 'Any time', say: 'any time' },
+  // The second task. ("Any time" moved to voice: rules are now removed by pinching them on the week.)
+  { id: 'focus', label: '🎯 Focus 2 h', say: FOCUS_TASK },
   { id: 'mic', label: '🎤 Speak', say: '' },
 ];
 

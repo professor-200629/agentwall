@@ -60,6 +60,7 @@ import { restore, serialize, STORAGE_KEY } from './logic/storage.js';
 import { sampleChange, stillFree, WATCH_DELAY_SECONDS, withGuestBusy } from './logic/watch.js';
 import { tradeOff, weekModel, type WeekModel } from './logic/week.js';
 import { muralAction, withoutRule, type MuralAction } from './logic/touch-week.js';
+import { focusTradeOff, focusWindows, isFocus } from './logic/focus.js';
 import { nextSteps, prepBlock, reminderItem, type NextStep, type NextStepKind } from './logic/next-step.js';
 import type { WeekBlock } from './logic/week.js';
 import type { AgentCardView } from './board.js';
@@ -496,10 +497,11 @@ export class BoardSystem extends createSystem({
 
   private currentWeek(): WeekModel | null {
     if (!this.plan) return null;
-    const key = JSON.stringify([this.plan.constraint, this.cal.busy.guest.length, this.prep]);
+    const focus = isFocus(this.plan);
+    const key = JSON.stringify([this.plan.constraint, this.cal.busy.guest.length, this.prep, focus]);
     if (key !== this.weekKey) {
       this.weekKey = key;
-      const week = weekModel(this.cal, this.plan.constraint);
+      const week = weekModel(this.cal, this.plan.constraint, { focus });
       // The agent's prep block is shown, but never counts against the call it belongs to.
       this.week = this.prep ? { ...week, blocks: [...week.blocks, this.prep] } : week;
     }
@@ -511,7 +513,11 @@ export class BoardSystem extends createSystem({
     if (plan && plan !== this.tradeOffText.plan) {
       this.tradeOffText = {
         plan,
-        text: plan.slot ? tradeOff(this.cal, plan.slot, plan.constraint) : null,
+        text: !plan.slot
+          ? null
+          : isFocus(plan)
+            ? focusTradeOff(this.cal, focusWindows(this.cal, plan.constraint), plan.slot)
+            : tradeOff(this.cal, plan.slot, plan.constraint),
       };
     }
     const item = this.currentItemId ? this.outbox.find((o) => o.id === this.currentItemId) : undefined;
@@ -563,7 +569,13 @@ export class BoardSystem extends createSystem({
     }
     this.setPlan(result.plan);
     playTick();
-    if (result.plan.slot) this.speakMoment({ kind: 'planned', slot: result.plan.slot, guest: this.cal.guest.name });
+    if (result.plan.slot) {
+      this.speakMoment(
+        isFocus(result.plan)
+          ? { kind: 'planned-focus', slot: result.plan.slot }
+          : { kind: 'planned', slot: result.plan.slot, guest: this.cal.guest.name },
+      );
+    }
     if (result.by === 'ai' && !result.note) this.say(`Planned by AI · ${MODEL_LABEL}${post}`, 'ai');
     else if (result.by === 'ai') {
       // Short, calm wording: the rules double-checking the AI is a feature, not an error.
@@ -763,7 +775,7 @@ export class BoardSystem extends createSystem({
       this.say('In the demo outbox · nothing was really sent', 'ok');
       playTick();
       // The agent's next steps, one at a time, each needing your pinch.
-      this.steps = this.plan.slot ? nextSteps(this.cal, this.plan.slot) : [];
+      this.steps = this.plan.slot && !isFocus(this.plan) ? nextSteps(this.cal, this.plan.slot) : [];
       this.nextCard(true);
     }
     // A next-step offer nobody answers is skipped, so the demo keeps moving.
@@ -835,6 +847,7 @@ export class BoardSystem extends createSystem({
   private fireWatch(): void {
     const plan = this.plan;
     if (this.watchFired || !plan?.slot || plan.approval !== 'approved') return;
+    if (isFocus(plan)) return; // the sample change is about the guest; focus time is yours alone
     this.watchFired = true;
     const slot = plan.slot;
     this.cal = withGuestBusy(this.cal, sampleChange(slot));
@@ -888,7 +901,8 @@ export class BoardSystem extends createSystem({
         (chip.id === 'after4' && c.after === rule.after) ||
         (chip.id === 'thu' && c.day === rule.day) ||
         (chip.id === 'notwed' && !!c.notDays?.includes(rule.notDays?.[0] ?? '')) ||
-        (chip.id === 'task' && this.plan !== null);
+        (chip.id === 'task' && this.plan !== null && !isFocus(this.plan)) ||
+        (chip.id === 'focus' && isFocus(this.plan));
       const look = this.busy ? 'disabled' : hovered === i ? 'hover' : on ? 'active' : 'normal';
       this.board.setChip(i, look);
     });

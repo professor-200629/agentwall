@@ -132,7 +132,7 @@ export function drawMural(c: CanvasRenderingContext2D, w: number, h: number, v: 
       const ch = g.rowH * run.count - 2;
       const k = run.first.kind;
       if (k === 'free' || k === 'busy') continue;
-      c.fillStyle = k === 'buffer' ? 'rgba(255, 90, 80, 0.10)' : 'rgba(255,255,255,0.04)';
+      c.fillStyle = k === 'buffer' ? 'rgba(255, 90, 80, 0.10)' : k === 'short' ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.04)';
       c.fillRect(x0, y0, cw, ch);
       if (i < scanned) {
         hatch(c, x0, y0, cw, ch, k === 'rule' ? 'rgba(242, 184, 75, 0.35)' : 'rgba(255,255,255,0.10)');
@@ -200,7 +200,8 @@ export function drawMural(c: CanvasRenderingContext2D, w: number, h: number, v: 
       c.setLineDash([8, 6]);
       c.lineWidth = 3;
       c.strokeStyle = COLORS.link;
-      roundRect(c, g.x(i) + 4, g.y(alt.start) + 1, g.colW - 8, g.rowH - 2, 6);
+      const altRows = Math.max(1, (alt.end - alt.start) / week.step);
+      roundRect(c, g.x(i) + 4, g.y(alt.start) + 1, g.colW - 8, g.rowH * altRows - 2, 6);
       c.stroke();
       c.setLineDash([]);
     }
@@ -211,7 +212,8 @@ export function drawMural(c: CanvasRenderingContext2D, w: number, h: number, v: 
         const y0 = g.y(v.chosen.start);
         c.shadowColor = GOLD;
         c.shadowBlur = 22;
-        roundRect(c, x0, y0, g.colW - 6, g.rowH, 7);
+        // A 2-hour focus block spans its four rows.
+        roundRect(c, x0, y0, g.colW - 6, g.rowH * Math.max(1, (v.chosen.end - v.chosen.start) / week.step), 7);
         c.fillStyle = GOLD;
         c.fill();
         c.shadowBlur = 0;

@@ -6,6 +6,7 @@
  * version, or whose invite no longer matches its slot is dropped.
  * Plain TypeScript, unit-tested.
  */
+import { FOCUS_TASK, focusWindows } from './focus.js';
 import { isLinked, type OutboxItem, type Plan } from './plan.js';
 import { freeSlots, type CalendarData, type Slot } from './scheduler.js';
 
@@ -48,7 +49,8 @@ export function restore(json: string | null, cal: CalendarData): SavedBoard | nu
   const outbox = Array.isArray(data.outbox) ? data.outbox.filter(outboxOk).slice(0, 5) : [];
 
   // Slots are re-read from the calendar, so a tampered time cannot sneak in.
-  const known = new Map(freeSlots(cal).map((s) => [s.id, s]));
+  const isFocusPlan = isObj(data.plan) && data.plan.task === FOCUS_TASK;
+  const known = new Map((isFocusPlan ? focusWindows(cal) : freeSlots(cal)).map((s) => [s.id, s]));
   let plan: Plan | null = null;
   const p = data.plan;
   if (

@@ -5,6 +5,7 @@
  * The reasons come from code, not from the AI, so the wall's transparency never
  * depends on the model telling the truth.
  */
+import { focusWindows } from './focus.js';
 import {
   absMinutes,
   clock,
@@ -18,7 +19,7 @@ import {
   type Slot,
 } from './scheduler.js';
 
-export type CellKind = 'past' | 'busy' | 'buffer' | 'rule' | 'free';
+export type CellKind = 'past' | 'busy' | 'buffer' | 'rule' | 'short' | 'free';
 
 export interface WeekCell {
   day: string;
@@ -79,14 +80,21 @@ function ruleReason(c: Constraint, day: string, start: number, end: number): str
   return 'your rule';
 }
 
-export function weekModel(cal: CalendarData, constraint: Constraint = {}): WeekModel {
+/**
+ * @param opts.focus focus time: only YOUR calendar counts, and a half hour is free
+ *   only inside a 2-hour window ('short' = free, but the gap is under 2 hours)
+ */
+export function weekModel(cal: CalendarData, constraint: Constraint = {}, opts: { focus?: boolean } = {}): WeekModel {
   const { minutes, bufferMinutes, leadMinutes, stepMinutes } = cal.meeting;
   const dayStart = hm(cal.workday.start);
   const dayEnd = hm(cal.workday.end);
   const now = splitStamp(cal.now);
   const earliest = absMinutes(now.day, now.min) + leadMinutes;
-  const blocks = [...toBlocks(cal.busy.owner, 'you'), ...toBlocks(cal.busy.guest, 'guest')];
+  const blocks = opts.focus
+    ? toBlocks(cal.busy.owner, 'you')
+    : [...toBlocks(cal.busy.owner, 'you'), ...toBlocks(cal.busy.guest, 'guest')];
   const free = new Set(freeSlots(cal, constraint).map((s) => s.id));
+  const windows = opts.focus ? focusWindows(cal, constraint) : [];
   const label = (b: WeekBlock) => `${b.who === 'you' ? 'You' : cal.guest.name} · ${b.title}`;
 
   const cells: WeekCell[] = [];
@@ -108,6 +116,18 @@ export function weekModel(cal: CalendarData, constraint: Constraint = {}): WeekM
       } else if (near) {
         kind = 'buffer';
         reason = `too close to ${near.title}`;
+      } else if (opts.focus) {
+        const covered = windows.some((w) => w.day === day && w.start <= start && w.end >= end);
+        if (covered) {
+          kind = 'free';
+          reason = 'part of 2 free hours';
+        } else if (ruleKeyFor(constraint, day, start, end)) {
+          kind = 'rule';
+          reason = ruleReason(constraint, day, start, end);
+        } else {
+          kind = 'short';
+          reason = 'gap under 2 h';
+        }
       } else if (!free.has(id)) {
         kind = 'rule';
         reason = ruleReason(constraint, day, start, end);

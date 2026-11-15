@@ -12,6 +12,7 @@
  *
  * Plain TypeScript; the network call is injected so tests can fake it.
  */
+import { isFocus, makeFocusPlan } from './focus.js';
 import { makePlan, type Plan } from './plan.js';
 import { mergeConstraint, parseRequest, ruleText, type Intent } from './request.js';
 import {
@@ -73,8 +74,9 @@ export function rulesUnderstood(
 ): { intent: Exclude<Intent, 'unknown'>; constraint: Constraint } | null {
   const parsed = parseRequest(text, cal);
   if (parsed.intent === 'unknown') return null;
-  const constraint =
-    parsed.intent === 'clear' ? {} : mergeConstraint(current?.constraint ?? {}, parsed.rule);
+  // Switching from focus time back to the meeting starts from no rule.
+  const base = parsed.intent === 'plan' && isFocus(current) ? {} : (current?.constraint ?? {});
+  const constraint = parsed.intent === 'clear' ? {} : mergeConstraint(base, parsed.rule);
   return { intent: parsed.intent, constraint };
 }
 
@@ -168,10 +170,24 @@ export function planWithRules(
 ): AgentResult {
   const parsed = parseRequest(text, cal);
   if (parsed.intent === 'unknown') return { plan: null, by: 'rules', note: 'Not sure what you meant.' };
-  const base = parsed.intent === 'clear' ? {} : (current?.constraint ?? {});
+  const base = parsed.intent === 'clear' || (parsed.intent === 'plan' && isFocus(current)) ? {} : (current?.constraint ?? {});
   const constraint = parsed.intent === 'clear' ? {} : mergeConstraint(base, parsed.rule);
   const plan = makePlan(cal, constraint, ruleText(constraint), current ?? undefined, { by: 'rules', note });
   return { plan, by: 'rules', note };
+}
+
+/**
+ * A focus-time request, or a rule while focus time is on the board: planned by
+ * the rules (focus.ts). Null for anything else (the meeting path handles it).
+ */
+export function focusRequest(cal: CalendarData, text: string, current: Plan | null): AgentResult | null {
+  const parsed = parseRequest(text, cal);
+  const onFocus = isFocus(current);
+  if (parsed.intent !== 'focus' && !(onFocus && (parsed.intent === 'rule' || parsed.intent === 'clear'))) return null;
+  const base = onFocus ? current!.constraint : {};
+  const constraint = parsed.intent === 'clear' ? {} : mergeConstraint(base, parsed.rule);
+  const plan = makeFocusPlan(cal, constraint, ruleText(constraint), current ?? undefined, { by: 'rules' });
+  return { plan, by: 'rules', note: '' };
 }
 
 /** Build the plan from a checked AI answer; rules fill any part that fails the checks. */
@@ -219,6 +235,9 @@ export async function runAgent(
   current: Plan | null,
   opts: { url: string; fetch?: FetchLike; timeoutMs?: number },
 ): Promise<AgentResult> {
+  // The focus task has no email to write, so the rules plan it (fast, always works).
+  const focus = focusRequest(cal, text, current);
+  if (focus) return focus;
   if (!opts.url) return planWithRules(cal, text, current, 'AI not set up; rules planned this');
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? AI_TIMEOUT_MS);

@@ -2,6 +2,7 @@
  * Drawing for the two linked cards. Pure canvas code: (context, size, plan) in,
  * pixels out. Layout numbers are canvas pixels.
  */
+import { isFocus } from '../logic/focus.js';
 import type { Plan, ReceiptLine } from '../logic/plan.js';
 import { clock, clockRange, dayLabel, type CalendarData, type Slot } from '../logic/scheduler.js';
 import { COLORS, drawWrapped, font, pill, roundRect } from './canvas-panel.js';
@@ -149,7 +150,12 @@ export function drawInviteCard(
   const sending = approved && x.sendingLeft !== null;
   const sent = approved && !sending && x.receipt !== null;
   cardBody(c, w, h, x.conflict ? '#e5534b' : COLORS.link);
-  label(c, sent ? 'SENT TO DEMO OUTBOX' : 'INVITE DRAFT', sent ? COLORS.green : COLORS.link);
+  const focus = isFocus(plan);
+  label(
+    c,
+    sent ? (focus ? 'SAVED TO DEMO CALENDAR' : 'SENT TO DEMO OUTBOX') : focus ? 'CALENDAR BLOCK' : 'INVITE DRAFT',
+    sent ? COLORS.green : COLORS.link,
+  );
   const inner = w - PAD * 2;
 
   if (!plan.invite) {
@@ -190,7 +196,7 @@ export function drawInviteCard(
   } else {
     font(c, 24, 500);
     c.fillStyle = COLORS.faint;
-    c.fillText('To', PAD, 112);
+    c.fillText(focus ? 'On' : 'To', PAD, 112);
     c.fillStyle = COLORS.muted;
     c.fillText(plan.invite.to, PAD + 44, 112);
 

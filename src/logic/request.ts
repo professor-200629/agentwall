@@ -11,7 +11,7 @@
  */
 import { dayLabel, describeConstraint, splitStamp, type CalendarData, type Constraint } from './scheduler.js';
 
-export type Intent = 'plan' | 'rule' | 'clear' | 'unknown';
+export type Intent = 'plan' | 'focus' | 'rule' | 'clear' | 'unknown';
 
 export interface ParsedRequest {
   intent: Intent;
@@ -83,6 +83,8 @@ export function parseRequest(text: string, cal: CalendarData): ParsedRequest {
   }
 
   const hasRule = Object.keys(rule).length > 0;
+  // The second task: "block 2 hours of focus time", "deep work", "heads-down time".
+  if (/\b(focus|deep work|heads?[- ]down)\b/.test(t)) return { intent: 'focus', rule };
   const wantsPlan = /\b(find|schedule|book|set up|arrange|plan|pick)\b.*\b(time|call|meeting|slot)\b|\b(draft|invite)\b/.test(t);
   if (wantsPlan) return { intent: 'plan', rule };
   if (hasRule) return { intent: 'rule', rule };

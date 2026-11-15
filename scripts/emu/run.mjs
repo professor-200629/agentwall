@@ -162,7 +162,7 @@ check('AI answer used: Thu 4:30 PM, AI-written email', plan?.by === 'ai' && plan
 check('board credits the AI', /Planned by AI/.test(hook('interaction').agentLine), hook('interaction').agentLine);
 
 hook('fakeAi', { ...aiAnswer, intent: 'clear', rule: { after: null, before: null, day: null, notDays: [] }, slotId: '2026-11-17T13:00', body: 'Hi Sam, Friday 9 AM?' }, 6000);
-await tap('chip:any');
+await hook('heard', 'any time'); // 'Any time' is a voice phrase now (the chip became Focus 2 h)
 await waitIdle(8000);
 plan = hook('plan');
 it = hook('interaction');
@@ -176,7 +176,7 @@ plan = hook('plan');
 check('AI offline: rules plan "Thursday" (Thu 12:30 PM)', plan?.by === 'rules' && plan.slot?.id === '2026-11-19T12:30' && /offline/.test(hook('interaction').agentLine), `${plan?.slot?.id} ${hook('interaction').agentLine}`);
 
 hook('fakeAi', null);
-await tap('chip:any'); // clear the rule first (rules), then turn the lying AI on
+await hook('heard', 'any time'); // clear the rule first (rules), then turn the lying AI on
 await waitIdle();
 hook('fakeAi', { ...aiAnswer, intent: 'rule', rule: { after: '16:00', before: null, day: null, notDays: [] }, slotId: '2026-11-17T13:00', body: 'Hi Sam, Tuesday 1:00 PM?' }, 100);
 await tap('chip:after4');
@@ -186,7 +186,7 @@ check('AI slot that breaks its own rule is overridden', plan?.slot?.id === '2026
 hook('fakeAi', null);
 
 // ---------- 6. Voice transcript (the emulator has no microphone) ----------
-await tap('chip:any');
+await hook('heard', 'any time'); // 'Any time' is a voice phrase now (the chip became Focus 2 h)
 await waitIdle();
 await hook('heard', 'can we do it on Thursday after 4');
 await waitIdle();
@@ -556,6 +556,36 @@ await tap('voice');
 check('the speaker button turns the voice off', hook('flow').voiceOn === false && /Voice off/.test(hook('interaction').agentLine), hook('interaction').agentLine);
 await tap('voice');
 check('and on again', hook('flow').voiceOn === true && /Voice on/.test(hook('interaction').agentLine), hook('interaction').agentLine);
+
+// ---------- 21. The second task: block 2 hours of focus time ----------
+look(0);
+hook('restart');
+await sleep(2000);
+hook('resetDemo');
+hook('setWatch', false);
+hook('setUnsendSeconds', 2);
+await tap('chip:focus');
+await waitIdle();
+plan = hook('plan');
+check('Focus 2 h: the agent finds two free hours on YOUR calendar (Thu 12:30–2:30 PM)', plan?.task === 'Block 2 hours of focus time' && plan.slot?.id === '2026-11-19T12:30' && plan.slot.end - plan.slot.start === 120 && /^Your calendar/.test(plan.invite?.to ?? ''), `${plan?.task} ${plan?.slot?.id}`);
+check('it says why, and says it out loud', /no 2-hour gap, so Thu 12:30 PM is first/.test(plan.reason) && /^Thursday at 12:30 PM is free for two hours\./.test(hook('spoken')), `${plan.reason} | ${hook('spoken')}`);
+await tap('chip:after4');
+await waitIdle();
+plan = hook('plan');
+check('rules work for focus time too: only after 4 PM -> Thu 4–6 PM', plan?.task === 'Block 2 hours of focus time' && plan.slot?.id === '2026-11-19T16:00', plan?.slot?.id);
+aim('invite');
+await sleep(300);
+pinchValue(1);
+await sleep(1800);
+pinchValue(0);
+await sleep(4000);
+const fbox = hook('outbox');
+check('hold to approve: the block is saved to the demo calendar, no meeting follow-ups', fbox.length === 1 && fbox[0].status === 'sent' && /^Focus time/.test(fbox[0].subject) && hook('flow').card === null, JSON.stringify(fbox.map((o) => o.subject)));
+await tap('chip:task');
+await waitIdle();
+plan = hook('plan');
+check('back to the meeting task: a fresh plan without the focus rule (Tue 1:00 PM)', plan?.task !== 'Block 2 hours of focus time' && plan.slot?.id === '2026-11-17T13:00' && JSON.stringify(plan.constraint) === '{}', `${plan?.task} ${plan?.slot?.id} ${JSON.stringify(plan?.constraint)}`);
+hook('setUnsendSeconds', 5);
 
 look(0, -10);
 console.log(`\n${results.filter(Boolean).length}/${results.length} passed`);

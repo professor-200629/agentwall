@@ -7,6 +7,7 @@ import { clock, dayLabel, type Slot } from './scheduler.js';
 
 export type SpokenMoment =
   | { kind: 'planned'; slot: Slot; guest: string }
+  | { kind: 'planned-focus'; slot: Slot }
   | { kind: 'sent' }
   | { kind: 'unsent' }
   | { kind: 'offer-prep' }
@@ -25,6 +26,8 @@ export function lineFor(m: SpokenMoment): string {
   switch (m.kind) {
     case 'planned':
       return `${spokenTime(m.slot)} works for you and ${m.guest}. Pinch and hold the card to send it.`;
+    case 'planned-focus':
+      return `${spokenTime(m.slot)} is free for two hours. Pinch and hold the card to block it.`;
     case 'sent':
       return 'Sent to the demo outbox.';
     case 'unsent':
