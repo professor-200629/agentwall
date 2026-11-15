@@ -58,11 +58,24 @@ function toBlocks(list: BusyBlock[], who: 'you' | 'guest'): WeekBlock[] {
   });
 }
 
+/** One part of the user's rule: the single day, the after/before times, or one excluded day. */
+export type RuleKey = 'day' | 'after' | 'before' | `not:${string}`;
+
+/** Which rule part rules out this half hour (the first that applies), or null. */
+export function ruleKeyFor(c: Constraint, day: string, start: number, end: number): RuleKey | null {
+  if (c.day && c.day !== day) return 'day';
+  if (c.notDays?.includes(day)) return `not:${day}`;
+  if (c.after !== undefined && start < c.after) return 'after';
+  if (c.before !== undefined && end > c.before) return 'before';
+  return null;
+}
+
 function ruleReason(c: Constraint, day: string, start: number, end: number): string {
-  if (c.day && c.day !== day) return `only ${short(c.day)} rule`;
-  if (c.notDays?.includes(day)) return `not ${short(day)} rule`;
-  if (c.after !== undefined && start < c.after) return `before ${clock(c.after).replace(':00', '')} rule`;
-  if (c.before !== undefined && end > c.before) return `after ${clock(c.before).replace(':00', '')} rule`;
+  const key = ruleKeyFor(c, day, start, end);
+  if (key === 'day') return `only ${short(c.day!)} rule`;
+  if (key === 'after') return `before ${clock(c.after!).replace(':00', '')} rule`;
+  if (key === 'before') return `after ${clock(c.before!).replace(':00', '')} rule`;
+  if (key) return `not ${short(day)} rule`;
   return 'your rule';
 }
 

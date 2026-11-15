@@ -29,6 +29,18 @@ export interface MuralView {
   tag: string;
   /** Block ids (day+start) added by the sample change, drawn as NEW. */
   fresh: Set<string>;
+  /** What the hand ray is over: a free time to pick, or a rule area to remove. */
+  hover?: MuralHover | null;
+}
+
+export interface MuralHover {
+  kind: 'pick' | 'rule';
+  day: string;
+  start: number;
+  /** For a rule: its reason text; every cell with the same reason lights up. */
+  reason: string;
+  /** Short call to action, e.g. "Pinch: 2:30 PM" or "Pinch to remove: after 4 PM". */
+  label: string;
 }
 
 export function muralGrid(w: number, h: number, week: WeekModel) {
@@ -208,13 +220,51 @@ export function drawMural(c: CanvasRenderingContext2D, w: number, h: number, v: 
     }
   }
 
+  // Hand ray hover: the free time you would pick, or the whole rule you would remove.
+  if (done && v.hover) {
+    const hv = v.hover;
+    const cells =
+      hv.kind === 'rule'
+        ? week.cells.filter((cell) => cell.kind === 'rule' && cell.reason === hv.reason)
+        : week.cells.filter((cell) => cell.day === hv.day && cell.start === hv.start);
+    const color = hv.kind === 'rule' ? COLORS.amber : COLORS.link;
+    for (const cell of cells) {
+      const i = week.days.indexOf(cell.day);
+      const x0 = g.x(i) + 3;
+      const y0 = g.y(cell.start) + 1;
+      c.fillStyle = hv.kind === 'rule' ? 'rgba(242, 184, 75, 0.22)' : 'rgba(127, 178, 255, 0.30)';
+      c.fillRect(x0, y0, g.colW - 6, g.rowH - 2);
+    }
+    // Outline the hovered cell itself and label it.
+    const i = week.days.indexOf(hv.day);
+    if (i >= 0) {
+      const x0 = g.x(i) + 3;
+      const y0 = g.y(hv.start) + 1;
+      c.lineWidth = 4;
+      c.strokeStyle = color;
+      roundRect(c, x0, y0, g.colW - 6, g.rowH - 2, 6);
+      c.stroke();
+      font(c, 17, 800);
+      const tw = c.measureText(hv.label).width + 16;
+      const lx = Math.min(Math.max(x0, MURAL.axisW), w - MURAL.padR - tw);
+      const ly = y0 - 28 < MURAL.headerH ? y0 + g.rowH + 2 : y0 - 28;
+      roundRect(c, lx, ly, tw, 26, 13);
+      c.fillStyle = color;
+      c.fill();
+      c.fillStyle = COLORS.ink;
+      c.textBaseline = 'middle';
+      c.fillText(hv.label, lx + 8, ly + 14);
+      c.textBaseline = 'middle';
+    }
+  }
+
   // Footer: legend + the agent's reason.
   const fy = h - MURAL.footerH;
   font(c, 15, 700);
   const legend: Array<[string, string]> = [
     [PERSON.you.fill, 'You busy'],
     [PERSON.guest.fill, 'Sam busy'],
-    ['rgba(242, 184, 75, 0.6)', 'Your rule'],
+    ['rgba(242, 184, 75, 0.6)', 'Your rule (pinch to remove)'],
     [GOLD, 'Agent pick'],
   ];
   let lx = MURAL.axisW;

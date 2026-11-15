@@ -34,6 +34,10 @@ The app saves its board only in your browser.
 5. Pinch **"Only after 4 PM"**. The gold time and the email should change.
    Look at the small line on the right of the header: does it say
    "Planned by AI · Groq" or "Rules · …"?
+   - Point at an amber striped area on the week ("before 4 PM rule") and
+     pinch: the rule should disappear and the agent re-plans.
+   - Point at any free (empty) half hour and pinch: the email should move to
+     that time.
 6. Pinch one of the outlined **"4:00 PM ⇄"** pills on the wall. The email
    should rewrite itself and say "NEEDS APPROVAL". Then pinch a chip again:
    does that next pinch work first time?

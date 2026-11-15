@@ -19,6 +19,7 @@ import {
   MeshBasicMaterial,
   PlaneGeometry,
   RingGeometry,
+  Vector3,
 } from '@iwsdk/core';
 import { CHIPS, type ChipLook } from './chips.js';
 import type { OutboxItem, Plan } from './logic/plan.js';
@@ -26,7 +27,7 @@ import { BOARD } from './logic/placement.js';
 import type { WeekModel } from './logic/week.js';
 import { CanvasPanel, COLORS, drawWrapped, font, pill, PX_PER_M, roundRect } from './ui/canvas-panel.js';
 import { CHIP_FONT_PX, drawAltRow, drawChip, drawGlow, drawInviteCard, drawTray, type InviteExtras } from './ui/cards.js';
-import { drawMural, muralGrid, type MuralView } from './ui/mural.js';
+import { drawMural, muralGrid, type MuralHover, type MuralView } from './ui/mural.js';
 
 export type BoardStatus = 'searching' | 'wall' | 'same-wall' | 'fallback' | 'preview';
 
@@ -139,6 +140,8 @@ export class Board {
   /** Sweep progress 0..1, and the last drawn sweep step (redraw only on change). */
   private sweep = 1;
   private sweepStep = -1;
+  private muralHover: MuralHover | null = null;
+  private muralHoverKey = '';
   private cueT = -1;
   private popT = -1;
 
@@ -162,7 +165,8 @@ export class Board {
     // pinching the chips "requires extreme accuracy". Chip pads meet halfway across
     // the gap between chips, so there is no dead zone and no overlap.
     this.chipPanels.forEach((chip, i) => hitPad(chip.mesh, LAYOUT.chips[i].w, LAYOUT.chips[i].h, px(5), px(16)));
-    this.altRows.forEach((row) => hitPad(row.mesh, LAYOUT.pill.w, LAYOUT.pill.h, px(12), px(12)));
+    // Pills sit on the touchable week: pad sideways only, so free times above and below stay pinchable.
+    this.altRows.forEach((row) => hitPad(row.mesh, LAYOUT.pill.w, LAYOUT.pill.h, px(12), px(2)));
     this.replanButtons.forEach((b, i) => {
       const r = i === 0 ? LAYOUT.replanYes : LAYOUT.replanNo;
       hitPad(b.mesh, r.w, r.h, px(10), px(14));
@@ -214,6 +218,51 @@ export class Board {
     this.setOutbox([]);
     this.object.visible = false;
     this.drawBack();
+  }
+
+  /** What the hand ray is over on the week (redraws the mural only when it changes). */
+  setMuralHover(hover: MuralHover | null): void {
+    const key = hover ? `${hover.kind}|${hover.day}|${hover.start}|${hover.label}` : '';
+    if (key === this.muralHoverKey) return;
+    this.muralHoverKey = key;
+    this.muralHover = hover;
+    if (this.sweep >= 1) {
+      this.sweepStep = -1;
+      this.drawMuralIfNeeded();
+    }
+  }
+
+  /** Test hook: what the mural hover shows now. */
+  get muralHoverLabel(): string | null {
+    return this.muralHover?.label ?? null;
+  }
+
+  /** Test hook: the world position of a half hour's centre on the mural. */
+  muralPoint(dayIndex: number, minute: number): [number, number, number] | null {
+    const week = this.week;
+    if (!week) return null;
+    const w = this.mural.canvas.width;
+    const h = this.mural.canvas.height;
+    const g = muralGrid(w, h, week);
+    const x = g.x(dayIndex) + g.colW / 2;
+    const y = g.y(minute) + g.rowH / 2;
+    const local = new Vector3((x / w - 0.5) * LAYOUT.mural.w, (0.5 - y / h) * LAYOUT.mural.h, 0);
+    return this.mural.mesh.localToWorld(local).toArray() as [number, number, number];
+  }
+
+  /** A hit on the mural (texture uv) as a day column and minute, or null outside the grid. */
+  muralSpot(u: number, v: number): { dayIndex: number; minute: number } | null {
+    const week = this.week;
+    if (!week) return null;
+    const w = this.mural.canvas.width;
+    const h = this.mural.canvas.height;
+    const g = muralGrid(w, h, week);
+    const x = u * w;
+    const y = (1 - v) * h;
+    const dayIndex = Math.floor((x - g.x(0)) / g.colW);
+    const minute = week.dayStart + ((y - g.y(week.dayStart)) / g.rowH) * week.step;
+    if (dayIndex < 0 || dayIndex >= week.days.length || minute < week.dayStart || minute >= week.dayEnd) return null;
+    return { dayIndex, minute };
   }
 
   /** The Move button's label (e.g. a countdown) and hover state. */
@@ -390,6 +439,7 @@ export class Board {
       reason: plan.reason,
       tag: plan.by === 'ai' ? 'AI' : plan.by === 'you' ? 'YOU' : 'RULES',
       fresh: this.fresh,
+      hover: this.sweep >= 1 ? this.muralHover : null,
     };
     this.mural.draw((c, w, h) => drawMural(c, w, h, view));
     this.placePills();

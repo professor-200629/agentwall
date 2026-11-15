@@ -46,17 +46,19 @@ import {
   chooseSlot,
   DEMO_TASK,
   isLinked,
+  makePlan,
   removeFromOutbox,
   unapprove,
   UNSEND_SECONDS,
   type OutboxItem,
   type Plan,
 } from './logic/plan.js';
-import { parseRequest } from './logic/request.js';
+import { parseRequest, ruleText } from './logic/request.js';
 import { clock, dayLabel, type CalendarData } from './logic/scheduler.js';
 import { restore, serialize, STORAGE_KEY } from './logic/storage.js';
 import { sampleChange, stillFree, WATCH_DELAY_SECONDS, withGuestBusy } from './logic/watch.js';
 import { tradeOff, weekModel, type WeekModel } from './logic/week.js';
+import { muralAction, withoutRule, type MuralAction } from './logic/touch-week.js';
 import { playApproved, playTick, unlockAudio } from './ui/sound.js';
 import type { InviteExtras } from './ui/cards.js';
 import { VoiceInput } from './voice.js';
@@ -69,8 +71,15 @@ const MODEL_LABEL = 'Groq';
 const CHIP_RULES = CHIPS.map((c) => parseRequest(c.say, baseCalendar).rule);
 
 /** An Object3D as IWSDK's pointer system (@pmndrs/pointer-events) sees it. */
+interface PointerHit {
+  pointerId: number;
+  pointerType: string;
+  /** Where on the mesh's texture the ray hit (0..1). */
+  uv?: { x: number; y: number };
+}
+
 interface PointerTarget {
-  addEventListener(type: 'pointerdown', listener: (e: { pointerId: number; pointerType: string }) => void): void;
+  addEventListener(type: 'pointerdown' | 'pointermove' | 'pointerleave', listener: (e: PointerHit) => void): void;
   setPointerCapture(pointerId: number): void;
 }
 
@@ -84,7 +93,7 @@ interface PointerTarget {
  * Never for the fingertip (touch) pointer: it only lets go when it loses its hit,
  * which a capture prevents, so it would own the hand for good.
  */
-function capture(target: PointerTarget, e: { pointerId: number; pointerType: string }): void {
+function capture(target: PointerTarget, e: PointerHit): void {
   if (e.pointerType !== 'touch') target.setPointerCapture(e.pointerId);
 }
 
@@ -94,7 +103,10 @@ interface NativePlane {
   polygon: ReadonlyArray<{ x: number; z: number }>;
 }
 
-type Press = { kind: 'chip' | 'alt' | 'replan'; index: number } | { kind: 'invite' | 'move'; index: 0 };
+type Press =
+  | { kind: 'chip' | 'alt' | 'replan'; index: number }
+  | { kind: 'invite' | 'move'; index: 0 }
+  | { kind: 'mural'; index: 0; u: number; v: number };
 
 /** Seconds to look at the new spot after pinching "Move board". */
 export const MOVE_SECONDS = 3;
@@ -141,6 +153,8 @@ export interface AgentWallDebug {
   watchNow: () => void;
   /** Same path as Quest's recenter (XRReferenceSpace 'reset'). */
   recenter: () => void;
+  muralPoint: (dayIndex: number, minute: number) => [number, number, number] | null;
+  weekCells: () => Array<{ day: string; start: number; kind: string; reason: string }>;
   setMoveSeconds: (seconds: number) => void;
   /** Test hook: turn the automatic sample change on/off (off keeps long test runs predictable). */
   setWatch: (on: boolean) => void;
@@ -209,6 +223,9 @@ export class BoardSystem extends createSystem({
   private resetSpace: XRReferenceSpace | null = null;
   private moveEntity!: Entity;
   private backEntity!: Entity;
+  /** Where the hand ray is on the week (texture uv), for the hover highlight. */
+  private muralUv: { u: number; v: number } | null = null;
+  private muralUvKey = '';
   private headPos = new Vector3();
   private headQuat = new Quaternion();
   private headFwd = new Vector3();
@@ -275,6 +292,8 @@ export class BoardSystem extends createSystem({
     // The board itself is a (do-nothing) ray target: IWSDK only shows the hand ray's
     // cursor on targets, and the first Quest tester saw no pointer until exactly on a chip.
     this.backEntity = interactive(this.board.backPanel.mesh, boardEntity);
+    // The week itself is touchable: pick a free time, remove a rule, or ask why.
+    interactive(this.board.mural.mesh, boardEntity);
 
     // IWSDK's pointer system dispatches pointer events on the Object3D itself.
     // A fast click can press and release between two frames, so presses are
@@ -294,6 +313,17 @@ export class BoardSystem extends createSystem({
     // release always arrives (see capture()).
     const back = this.board.backPanel.mesh as unknown as PointerTarget;
     back.addEventListener('pointerdown', (e) => capture(back, e));
+    const mural = this.board.mural.mesh as unknown as PointerTarget;
+    mural.addEventListener('pointerdown', (e) => {
+      capture(mural, e);
+      if (e.uv) this.presses.push({ kind: 'mural', index: 0, u: e.uv.x, v: e.uv.y });
+    });
+    mural.addEventListener('pointermove', (e) => {
+      if (e.uv) this.muralUv = { u: e.uv.x, v: e.uv.y };
+    });
+    mural.addEventListener('pointerleave', () => {
+      this.muralUv = null;
+    });
     // Pinch-and-hold: a pinch that STARTS on the invite keeps holding until the hand
     // opens (XR selectend, or mouse-up), even if the ray drifts off the card.
     // The ray capture above already keeps the hit on the card; inviteHeld is a second,
@@ -536,6 +566,8 @@ export class BoardSystem extends createSystem({
         }
       } else if (press.kind === 'invite' && this.sendingUntil !== null) {
         this.unsend();
+      } else if (press.kind === 'mural') {
+        this.pressMural(press.u, press.v);
       } else if (press.kind === 'move' && this.world.visibilityState.value === VisibilityState.NonImmersive) {
         this.say('Move board works in mixed reality: it moves the board to the wall you look at', 'muted');
       } else if (press.kind === 'move' && this.moveUntil === null) {
@@ -565,11 +597,70 @@ export class BoardSystem extends createSystem({
       this.hoveredIndex(this.altEntities),
       this.hoveredIndex(this.replanEntities),
     );
+    this.updateMuralHover();
     const moveLeft = this.moveUntil === null ? 0 : Math.max(1, Math.ceil(this.moveUntil - this.clockS));
     this.board.setMove(
       this.moveUntil === null ? '⤢ Move board' : `Look at a wall · ${moveLeft}`,
       this.moveUntil === null && this.moveEntity.hasComponent(Hovered),
     );
+  }
+
+  /** What pinching this spot of the week would do (null outside it, or while busy). */
+  private muralActionAt(u: number, v: number): MuralAction | null {
+    if (this.busy || this.board.sweeping || !this.plan) return null;
+    const spot = this.board.muralSpot(u, v);
+    const week = this.currentWeek();
+    if (!spot || !week) return null;
+    return muralAction(this.cal, this.plan, week, spot.dayIndex, spot.minute);
+  }
+
+  private pressMural(u: number, v: number): void {
+    const action = this.muralActionAt(u, v);
+    const plan = this.plan;
+    if (!action || !plan) return;
+    if (action.kind === 'pick') {
+      if (plan.slot?.id === action.slot.id) return;
+      this.animateNext = false; // your own pick: no need to replay the agent's sweep
+      this.setPlan(chooseSlot(this.cal, plan, action.slot));
+      this.say(`You picked ${shortWhen(action.slot.day, action.slot.start)}`, 'muted');
+      playTick();
+    } else if (action.kind === 'remove-rule') {
+      const next = withoutRule(plan.constraint, action.key);
+      this.setPlan(makePlan(this.cal, next, ruleText(next), plan));
+      this.say(`Removed your rule "${action.label}" · the agent re-planned`, 'ok');
+      playTick();
+    } else {
+      this.say(action.text, 'muted');
+    }
+  }
+
+  /** Light up the free time or the rule under the hand ray (redraws only on change). */
+  private updateMuralHover(): void {
+    const uv = this.muralUv;
+    const key = uv ? `${uv.u.toFixed(3)},${uv.v.toFixed(3)}|${this.plan?.version ?? 0}|${this.board.sweeping}` : '';
+    if (key === this.muralUvKey) return;
+    this.muralUvKey = key;
+    const action = uv ? this.muralActionAt(uv.u, uv.v) : null;
+    if (!action || action.kind === 'explain') {
+      this.board.setMuralHover(null);
+    } else if (action.kind === 'pick') {
+      const current = this.plan?.slot?.id === action.slot.id;
+      this.board.setMuralHover({
+        kind: 'pick',
+        day: action.cell.day,
+        start: action.cell.start,
+        reason: action.cell.reason,
+        label: current ? 'Chosen time' : `Pinch: ${clock(action.slot.start)}`,
+      });
+    } else {
+      this.board.setMuralHover({
+        kind: 'rule',
+        day: action.cell.day,
+        start: action.cell.start,
+        reason: action.cell.reason,
+        label: `Pinch to remove: ${action.label}`,
+      });
+    }
   }
 
   private approveNow(current: Plan): void {
@@ -845,6 +936,7 @@ export class BoardSystem extends createSystem({
           'replan:yes': at(this.board.replanButtons[0].mesh),
           'replan:no': at(this.board.replanButtons[1].mesh),
           move: at(this.board.moveButton.mesh),
+          mural: at(this.board.mural.mesh),
         };
         CHIPS.forEach((c, i) => (t[`chip:${c.id}`] = at(this.board.chipPanels[i].mesh)));
         return t;
@@ -874,7 +966,10 @@ export class BoardSystem extends createSystem({
               visible: this.board.desk.visible,
             }
           : null,
+      muralPoint: (dayIndex, minute) => this.board.muralPoint(dayIndex, minute),
+      weekCells: () => this.currentWeek()?.cells ?? [],
       mural: () => ({
+        hover: this.board.muralHoverLabel,
         visible: this.board.mural.mesh.visible && this.board.object.visible,
         sweeping: this.board.sweeping,
         ruledOut: this.week?.ruledOut ?? 0,

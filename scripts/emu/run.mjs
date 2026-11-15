@@ -391,7 +391,8 @@ await sleep(300);
 const hidHover = hook('interaction').replanHovered;
 xr('select', { device: 'hand-right', duration: 0.2 });
 await sleep(400);
-check('the hidden Re-plan button does not catch the ray (IWSDK skips hidden objects)', hidHover === null && hook('interaction').presses === pressesBefore, `hover=${hidHover} presses ${pressesBefore}->${hook('interaction').presses}`);
+// The pinch now lands on the touchable week behind it, which is right; the hidden button must stay out of it.
+check('the hidden Re-plan button does not catch the ray (IWSDK skips hidden objects)', hidHover === null && hook('flow').replan === false, `hover=${hidHover} replan=${hook('flow').replan}`);
 
 // "No way for me to adjust the position of the board": Move board, then look where you want it.
 const startPos = hook('board').position;
@@ -419,6 +420,60 @@ check('control: without the memory the same recenter puts the board somewhere el
 look(0);
 hook('restart');
 await sleep(1500);
+
+// ---------- 16. The week is touchable: remove a rule, pick any free time, ask why ----------
+look(0);
+hook('restart');
+await sleep(2000);
+hook('resetDemo');
+hook('setWatch', false);
+await tap('chip:task');
+await waitIdle();
+await tap('chip:after4');
+await waitIdle();
+const days = hook('plan') ? ['2026-11-16', '2026-11-17', '2026-11-18', '2026-11-19', '2026-11-20'] : [];
+const cellPoint = (cell) => {
+  const p = hook('muralPoint', days.indexOf(cell.day), cell.start);
+  return { x: p[0], y: p[1], z: p[2] };
+};
+const aimCell = async (cell) => {
+  xr('set-transform', { device: 'hand-right', position: { x: 0.18, y: 1.0, z: -0.3 }, orientation: { pitch: 0, yaw: 0, roll: 0 } });
+  xr('look-at', { device: 'hand-right', target: cellPoint(cell) });
+  await sleep(400);
+};
+const pinchNow = async () => {
+  xr('select', { device: 'hand-right', duration: 0.2 });
+  await sleep(500);
+};
+let cells = hook('weekCells');
+const ruleCell = cells.find((c) => c.kind === 'rule' && c.reason === 'before 4 PM rule' && c.start >= 600);
+await aimCell(ruleCell);
+const ruleHover = hook('mural').hover;
+check('pointing at an amber rule area says what a pinch will do', /Pinch to remove: after 4 PM/.test(ruleHover ?? ''), String(ruleHover));
+const slotBefore = hook('plan').slot.id;
+await pinchNow();
+await waitIdle();
+plan = hook('plan');
+check('pinching the rule area removes the rule and the agent re-plans', !('after' in plan.constraint) && plan.slot.id !== slotBefore && /Removed your rule "after 4 PM"/.test(hook('interaction').agentLine), `${slotBefore} -> ${plan.slot.id} | ${hook('interaction').agentLine}`);
+check('the rule removal is saved for next time', !JSON.parse(hook('saved')).plan.constraint.after, hook('saved').slice(0, 120));
+
+cells = hook('weekCells');
+const shown = hook('plan');
+// Keep clear of the gold slot and the pills (a pill is about two rows tall).
+const nearPill = (c) => [shown.slot, ...shown.alternatives].some((s) => s.day === c.day && Math.abs(s.start - c.start) <= 60);
+const freeCell = cells.find((c) => c.kind === 'free' && !nearPill(c) && c.start >= 600);
+await aimCell(freeCell);
+const freeHover = hook('mural').hover;
+check('pointing at a free half hour offers it', /^Pinch: /.test(freeHover ?? ''), String(freeHover));
+await pinchNow();
+plan = hook('plan');
+const wantId = `${freeCell.day}T${String(Math.floor(freeCell.start / 60)).padStart(2, '0')}:${String(freeCell.start % 60).padStart(2, '0')}`;
+check('pinching any free time on the wall moves the invite there (you picked it)', plan.slot.id === wantId && plan.by === 'you' && plan.approval === 'needs' && /You picked (Mon|Tue|Wed|Thu|Fri)/.test(hook('interaction').agentLine), `${plan.slot.id} want ${wantId} | ${hook('interaction').agentLine}`);
+
+const busyCell = cells.find((c) => c.kind === 'busy' && c.start >= 600);
+await aimCell(busyCell);
+await pinchNow();
+check('pinching a busy block says why the agent cannot use it', hook('interaction').agentLine.includes(busyCell.reason), `${hook('interaction').agentLine} (want ${busyCell.reason})`);
 
 look(0, -10);
 console.log(`\n${results.filter(Boolean).length}/${results.length} passed`);

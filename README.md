@@ -21,6 +21,11 @@ checklist: [docs/TESTING-ON-QUEST.md](docs/TESTING-ON-QUEST.md).**
    meeting, your rule). One slot lights up gold; the runner-ups are outlined,
    and you can pinch one to pick it yourself. If the pick has a catch, the card
    says so ("Trade-off: only 10 min after Sam's class").
+   **The week is touchable:** point at any free half hour and pinch to move the
+   invite there; point at an amber rule area ("before 4 PM rule", "not Wed
+   rule") and pinch to remove that rule, and the agent re-plans in front of
+   you; pinch a busy block and the board says why it can't be used. Your rules
+   are saved and come back next time.
 4. **The decision tray:** the invite lands on your real table (or just above
    your lap if there is no table in reach). **Pinch and hold it for 1 second**
    to approve. You get **5 seconds to Unsend** (pinch again), then it goes to
@@ -45,8 +50,10 @@ Screenshots from Meta's Quest 3 emulator (IWER), not a real headset:
 | ![Needs approval](docs/screenshots/desk-1-needs-approval.png) | ![Unsend window](docs/screenshots/desk-2-unsend-window.png) |
 | **Receipt: RULES / YOU / DEMO** | **Agent keeps watch: conflict + Re-plan?** |
 | ![Receipt](docs/screenshots/desk-3-receipt.png) | ![Re-plan](docs/screenshots/desk-4-replan.png) |
-| **Next session, another seat: same spot** | |
-| ![Back on your wall](docs/screenshots/wall-back-same-spot.png) | |
+| **Point at a rule: pinch to remove it** | **Point at any free time: pinch to pick it** |
+| ![Remove a rule](docs/screenshots/wall-touch-remove-rule.png) | ![Pick a time](docs/screenshots/wall-touch-pick-time.png) |
+| **Next session, another seat: same spot** | **Move board button, cursor anywhere on the board** |
+| ![Back on your wall](docs/screenshots/wall-back-same-spot.png) | ![Move board](docs/screenshots/wall-move-button-cursor.png) |
 
 All calendar data is **sample data** (`src/data/sample-calendar.json`). Nothing
 reads a real calendar and nothing is sent.
@@ -143,6 +150,16 @@ npx iwsdk dev down
   IWSDK 1.0.1 drops a release that ends on empty space (e.g. a pinched "Also
   free" pill moves away under the ray) and the next pinch is swallowed. Found
   and fixed with the emulator replay `scripts/emu/pinch-replay.mjs`.
+
+## How the touchable week works
+
+- `src/logic/touch-week.ts`: turns a pinch on the mural (day column + minute)
+  into an action: pick that free time, remove the rule part that blocks it
+  (`ruleKeyFor` in `week.ts`, the same code that writes the amber labels), or
+  explain a busy block. Unit-tested.
+- The mural is one canvas texture; the hand ray's hit (`uv`) is mapped back to
+  the grid. Hovering lights up the free time, or every cell of the rule you
+  would remove, with a "Pinch: 2:30 PM" / "Pinch to remove: after 4 PM" label.
 
 ## How the week mural is drawn
 
