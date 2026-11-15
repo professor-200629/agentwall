@@ -21,6 +21,7 @@
  */
 import {
   createSystem,
+  Euler,
   Hovered,
   Pressed,
   Quaternion,
@@ -156,6 +157,7 @@ export interface AgentWallDebug {
   muralPoint: (dayIndex: number, minute: number) => [number, number, number] | null;
   weekCells: () => Array<{ day: string; start: number; kind: string; reason: string }>;
   setMoveSeconds: (seconds: number) => void;
+  setFlySlowdown: (k: number) => void;
   /** Test hook: turn the automatic sample change on/off (off keeps long test runs predictable). */
   setWatch: (on: boolean) => void;
   /** Test hook: what the mic would have heard (the emulator has no microphone). */
@@ -875,9 +877,7 @@ export class BoardSystem extends createSystem({
 
   private placeDesk(d: DeskPlacement): void {
     this.deskPlace = d;
-    const desk = this.board.desk;
-    desk.position.set(d.position.x, d.position.y, d.position.z);
-    desk.rotation.set(-d.tilt, d.yaw, 0, 'YXZ');
+    this.board.setDeskPose(d.position.x, d.position.y, d.position.z, new Euler(-d.tilt, d.yaw, 0, 'YXZ'));
   }
 
   private showDesktopPreview(): void {
@@ -972,6 +972,8 @@ export class BoardSystem extends createSystem({
         hover: this.board.muralHoverLabel,
         visible: this.board.mural.mesh.visible && this.board.object.visible,
         sweeping: this.board.sweeping,
+        flying: this.board.flying,
+        deskNow: this.board.desk.getWorldPosition(new Vector3()).toArray(),
         ruledOut: this.week?.ruledOut ?? 0,
         fresh: this.fresh.size,
       }),
@@ -988,6 +990,9 @@ export class BoardSystem extends createSystem({
       },
       setMoveSeconds: (seconds) => {
         this.moveSeconds = seconds;
+      },
+      setFlySlowdown: (k) => {
+        this.board.flySlowdown = k;
       },
       watchNow: () => {
         this.watchAt = null;

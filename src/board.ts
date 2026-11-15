@@ -18,6 +18,8 @@ import {
   Mesh,
   MeshBasicMaterial,
   PlaneGeometry,
+  Euler,
+  Quaternion,
   RingGeometry,
   Vector3,
 } from '@iwsdk/core';
@@ -28,6 +30,7 @@ import type { WeekModel } from './logic/week.js';
 import { CanvasPanel, COLORS, drawWrapped, font, pill, PX_PER_M, roundRect } from './ui/canvas-panel.js';
 import { CHIP_FONT_PX, drawAltRow, drawChip, drawGlow, drawInviteCard, drawTray, type InviteExtras } from './ui/cards.js';
 import { drawMural, muralGrid, type MuralHover, type MuralView } from './ui/mural.js';
+import { playLand, playWhoosh } from './ui/sound.js';
 
 export type BoardStatus = 'searching' | 'wall' | 'same-wall' | 'fallback' | 'preview';
 
@@ -95,6 +98,10 @@ const GLOW_PAD = 0.03;
 const RING_SEGMENTS = 64;
 /** Seconds the agent's sweep across the week takes. */
 export const SWEEP_SECONDS = 1.8;
+/** The invite's flight from the gold slot on the wall down to the desk. */
+export const FLY = { newPlanSeconds: 0.9, pickSeconds: 0.55, arc: 0.22, startScale: 0.3 };
+
+const easeInOut = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2);
 
 export interface BoardView {
   plan: Plan | null;
@@ -141,6 +148,19 @@ export class Board {
   private sweep = 1;
   private sweepStep = -1;
   private muralHover: MuralHover | null = null;
+  /** Where the desk card belongs (set by the system: real table or lap). */
+  private deskPos = new Vector3();
+  private deskQuat = new Quaternion();
+  /** Flight state: waiting for the sweep to end, then flying for flyDur seconds. */
+  private flyPending = false;
+  private flyT = -1;
+  private flyDur: number = FLY.newPlanSeconds;
+  private flyFrom = new Vector3();
+  private flyFromQuat = new Quaternion();
+  private flySlotId: string | null = null;
+  /** Test hook: stretch the flight so slow emulator commands can see it mid-air. */
+  flySlowdown = 1;
+  private tmpV = new Vector3();
   private muralHoverKey = '';
   private cueT = -1;
   private popT = -1;
@@ -307,6 +327,16 @@ export class Board {
         this.plan.slot?.id !== view.plan.slot?.id ||
         this.plan.constraintText !== view.plan.constraintText);
     const weekChanged = view.week !== this.week || view.fresh.size !== this.fresh.size;
+    // A new chosen time: the invite flies from that slot on the wall down to the desk.
+    const slotId = view.plan?.invite ? (view.plan.slot?.id ?? null) : null;
+    if (slotId !== this.flySlotId) {
+      this.flySlotId = slotId;
+      if (slotId) {
+        this.flyPending = true;
+        this.flyT = -1;
+        this.flyDur = (animate ? FLY.newPlanSeconds : FLY.pickSeconds) * this.flySlowdown;
+      }
+    }
     this.plan = view.plan;
     this.week = view.week;
     this.fresh = view.fresh;
@@ -388,9 +418,39 @@ export class Board {
     this.popT = 0;
   }
 
-  /** True while the agent's sweep is still playing. */
+  /** True while the agent's sweep (or the invite's flight to the desk) is still playing. */
   get sweeping(): boolean {
-    return this.sweep < 1;
+    return this.sweep < 1 || this.flyPending || this.flyT >= 0;
+  }
+
+  /** True while the invite is in the air between the wall and the desk. */
+  get flying(): boolean {
+    return this.flyT >= 0;
+  }
+
+  /** Where the desk card should rest; applied at once unless it is flying there. */
+  setDeskPose(x: number, y: number, z: number, rotation: Euler): void {
+    this.deskPos.set(x, y, z);
+    this.deskQuat.setFromEuler(rotation);
+    if (this.flyT < 0) {
+      this.desk.position.copy(this.deskPos);
+      this.desk.quaternion.copy(this.deskQuat);
+    }
+  }
+
+  private startFlight(): boolean {
+    const plan = this.plan;
+    const week = this.week;
+    const slot = plan?.slot;
+    if (!plan || !week || !slot || !this.object.visible) return false;
+    const day = week.days.indexOf(slot.day);
+    const from = day >= 0 ? this.muralPoint(day, slot.start) : null;
+    if (!from) return false;
+    this.flyFrom.set(from[0], from[1], from[2]);
+    this.object.getWorldQuaternion(this.flyFromQuat);
+    this.flyT = 0;
+    playWhoosh();
+    return true;
   }
 
   /** Per-frame animation. Cheap: no allocation; canvases redraw only on sweep steps. */
@@ -413,6 +473,31 @@ export class Board {
       if (t >= 1) {
         this.cueT = -1;
         this.cue.mesh.visible = false;
+      }
+    }
+    // The invite flight: wait for the sweep, then arc from the gold slot to the desk.
+    if (this.flyPending && this.sweep >= 1) {
+      this.flyPending = false;
+      if (!this.startFlight()) {
+        this.desk.position.copy(this.deskPos);
+        this.desk.quaternion.copy(this.deskQuat);
+      }
+    }
+    if (this.flyPending) this.desk.visible = false; // it appears from the wall
+    if (this.flyT >= 0) {
+      this.flyT += dt;
+      const t = Math.min(1, this.flyT / this.flyDur);
+      const e = easeInOut(t);
+      this.desk.position.lerpVectors(this.flyFrom, this.deskPos, e);
+      this.desk.position.y += Math.sin(Math.PI * e) * FLY.arc;
+      this.desk.quaternion.slerpQuaternions(this.flyFromQuat, this.deskQuat, e);
+      this.desk.scale.setScalar(INVITE.deskScale * (FLY.startScale + (1 - FLY.startScale) * e));
+      if (t >= 1) {
+        this.flyT = -1;
+        this.desk.position.copy(this.deskPos);
+        this.desk.quaternion.copy(this.deskQuat);
+        this.desk.scale.setScalar(INVITE.deskScale);
+        playLand();
       }
     }
     if (this.popT >= 0) {

@@ -35,6 +35,29 @@ export function playApproved(): void {
   tone(990, 0.12, 0.45, 0.16);
 }
 
+/** A soft rising sweep: the invite leaves the wall for the desk. */
+export function playWhoosh(): void {
+  if (!ctx) return;
+  const t = ctx.currentTime;
+  const osc = ctx.createOscillator();
+  const amp = ctx.createGain();
+  osc.type = 'triangle';
+  osc.frequency.setValueAtTime(240, t);
+  osc.frequency.exponentialRampToValueAtTime(720, t + 0.5);
+  amp.gain.setValueAtTime(0, t);
+  amp.gain.linearRampToValueAtTime(0.06, t + 0.08);
+  amp.gain.exponentialRampToValueAtTime(0.0001, t + 0.6);
+  osc.connect(amp).connect(ctx.destination);
+  osc.start(t);
+  osc.stop(t + 0.65);
+}
+
+/** A low soft tap: the invite lands on the desk. */
+export function playLand(): void {
+  tone(330, 0, 0.12, 0.12);
+  tone(495, 0.05, 0.18, 0.08);
+}
+
 /** Soft tick when a slot is swapped. */
 export function playTick(): void {
   tone(520, 0, 0.08, 0.08);

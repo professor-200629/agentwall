@@ -475,6 +475,29 @@ await aimCell(busyCell);
 await pinchNow();
 check('pinching a busy block says why the agent cannot use it', hook('interaction').agentLine.includes(busyCell.reason), `${hook('interaction').agentLine} (want ${busyCell.reason})`);
 
+// ---------- 17. The invite flies from the gold slot on the wall down to the desk ----------
+look(0);
+hook('restart');
+await sleep(2000);
+hook('resetDemo');
+hook('setFlySlowdown', 6); // 5.4 s flight, so the emulator commands can catch it mid-air
+await tap('chip:task');
+const m0 = hook('mural');
+let sawHidden = !hook('desk')?.visible || m0.flying; // not resting on the desk yet: hidden, or still in the air
+let mid = null;
+for (let i = 0; i < 30 && !mid; i++) {
+  const m = hook('mural');
+  if (m.flying) mid = m.deskNow;
+  else await sleep(300);
+}
+await waitIdle(12000);
+const rest = hook('desk');
+const restNow = hook('mural').deskNow;
+check('right after asking, the invite is not resting on the desk yet (hidden or flying)', sawHidden, `hidden=${sawHidden}`);
+check('then it flies: mid-air it is above its desk spot', !!mid && mid[1] > rest.position[1] + 0.05, `mid=${mid?.map((v) => v.toFixed(2))} rest y=${rest.position[1].toFixed(2)}`);
+check('and lands exactly on its desk spot, ready to hold', rest.visible && dist3(restNow, rest.position) < 0.005 && !hook('mural').sweeping, `off by ${dist3(restNow, rest.position).toFixed(4)} m`);
+hook('setFlySlowdown', 1);
+
 look(0, -10);
 console.log(`\n${results.filter(Boolean).length}/${results.length} passed`);
 process.exit(results.every(Boolean) ? 0 : 1);
