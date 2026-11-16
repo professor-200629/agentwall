@@ -292,16 +292,16 @@ box = hook('outbox');
 check('after 5 s it is sent to the demo outbox with a RULES/AI/YOU receipt', box.length === 1 && box[0].status === 'sent' && box[0].receipt?.length === 5 && hook('flow').sendingLeft === null, JSON.stringify(box[0]?.receipt?.map((r) => r.tag)));
 
 hook('setUnsendSeconds', 5);
-// ---------- 12. The agent keeps watch ----------
+// ---------- 12. The week changes over the approved time (the whole flow: scripts/emu/review.mjs) ----------
 const approvedSlot = hook('plan').slot.id;
-hook('watchNow');
-await sleep(500);
+await tap('calendar'); // "Try a calendar change": the labelled example
+await sleep(800);
 fl = hook('flow');
-check('a SAMPLE change lands on the approved time and the agent flags it', fl.conflict && fl.replan && hook('mural').fresh === 1, JSON.stringify(fl));
-await tap('replan:yes');
+check('the example change lands on the approved time: blocked at once, and the review opens', !!fl.conflict && hook('review')?.old === approvedSlot && hook('outbox')[0].blocked?.why === 'conflict' && hook('mural').fresh === 1, JSON.stringify(fl));
+await tap('cand0');
 await waitIdle();
 plan = hook('plan');
-check('Re-plan moves the invite to a new time and needs a fresh hold', plan.slot.id !== approvedSlot && plan.approval === 'needs' && hook('flow').conflict === null && /Re-planned/.test(hook('interaction').agentLine), `${approvedSlot} -> ${plan.slot.id} | ${hook('interaction').agentLine}`);
+check('another time is only a trial, and needs a fresh hold', plan.slot.id !== approvedSlot && plan.approval === 'needs' && hook('flow').conflict === null && hook('outbox').length === 1 && /Trying/.test(hook('interaction').agentLine), `${approvedSlot} -> ${plan.slot.id} | ${hook('interaction').agentLine}`);
 
 // ---------- 13. The desk: real table vs lap ----------
 xr('set-transform', { device: 'headset', position: { x: -0.75, y: 1.15, z: 0.2 }, orientation: { pitch: 0, yaw: 90, roll: 0 } });
@@ -397,7 +397,7 @@ const hidHover = hook('interaction').replanHovered;
 xr('select', { device: 'hand-right', duration: 0.2 });
 await sleep(400);
 // The pinch now lands on the touchable week behind it, which is right; the hidden button must stay out of it.
-check('the hidden Re-plan button does not catch the ray (IWSDK skips hidden objects)', hidHover === null && hook('flow').replan === false, `hover=${hidHover} replan=${hook('flow').replan}`);
+check('a hidden card button does not catch the ray (IWSDK skips hidden objects)', hidHover === null && hook('flow').card === null, `hover=${hidHover} card=${hook('flow').card}`);
 
 // "No way for me to adjust the position of the board": Move board, then look where you want it.
 const startPos = hook('board').position;

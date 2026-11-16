@@ -140,13 +140,20 @@ function whenLabel(iso: string): string {
   return d.toLocaleString(undefined, { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
 }
 
+/** What the last re-read of a linked calendar did. A failed one changes nothing that was known. */
+export type RefreshResult = { tried: false } | { tried: true; ok: true; busy: number } | { tried: true; ok: false; error: string };
+let lastRefresh: RefreshResult = { tried: false };
+export const refreshState = (): RefreshResult => lastRefresh;
+
 /** The calendar to plan on right now. */
 export function activeCalendar(now: Date = new Date()): ActiveCalendar {
   const saved = savedCalendar();
   if (!saved) return { cal: sample, real: false, label: 'SAMPLE WEEK · not a real calendar' };
   const cal = buildRealCalendar(sample, { blocks: saved.blocks, guest: saved.guest, owner: saved.owner, topic: saved.topic }, now);
   const who = saved.guest ? '' : ' · sample guest';
-  return { cal, real: true, label: `YOUR CALENDAR · read ${whenLabel(saved.savedAt)}${who}` };
+  // A failed re-read is said out loud: the wall still shows the last calendar that was read.
+  const stale = lastRefresh.tried && !lastRefresh.ok ? ' · REFRESH FAILED, showing that read' : '';
+  return { cal, real: true, label: `YOUR CALENDAR · read ${whenLabel(saved.savedAt)}${stale}${who}` };
 }
 
 export type ImportResult = { ok: true; busy: number } | { ok: false; error: string };
@@ -207,11 +214,21 @@ export async function importLink(
   }
 }
 
-/** On start: a linked calendar is read again, so the wall shows today's truth. Never throws. */
-export async function refreshLinked(workerUrl: string, timeoutMs = 4000): Promise<void> {
+/**
+ * A linked calendar is read again (on start, and when you pinch "Refresh my calendar").
+ * On success the new snapshot replaces the old one; on failure the old one is kept
+ * and the result says so. Never throws.
+ */
+export async function refreshLinked(
+  workerUrl: string,
+  timeoutMs = 4000,
+  fetchImpl?: typeof fetch,
+): Promise<RefreshResult> {
   const saved = savedCalendar();
-  if (!saved || saved.source !== 'link' || !saved.url) return;
-  await importLink(saved.url, workerUrl, { details: saved, timeoutMs });
+  if (!saved || saved.source !== 'link' || !saved.url) return (lastRefresh = { tried: false });
+  const r = await importLink(saved.url, workerUrl, { details: saved, timeoutMs, fetch: fetchImpl });
+  lastRefresh = r.ok ? { tried: true, ok: true, busy: r.busy } : { tried: true, ok: false, error: r.error };
+  return lastRefresh;
 }
 
 /** Change who the call is with and what it is about, keeping the calendar. */

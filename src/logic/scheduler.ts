@@ -32,6 +32,8 @@ export interface CalendarData {
   source?: 'sample' | 'yours';
   /** What the call is about, when the user said so (their own calendar only). */
   topic?: string;
+  /** Minutes ahead of UTC, when the week states its own zone (the sample week: IST = 330). */
+  utcOffsetMinutes?: number;
 }
 
 /** What the user asked for. All fields optional; minutes are minutes after midnight. */

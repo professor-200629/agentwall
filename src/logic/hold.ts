@@ -18,13 +18,15 @@ export const HOLD = {
   drainPerSecond: 3,
 } as const;
 
-export type HoldEvent = 'idle' | 'holding' | 'complete';
+/** 'released' is reported once, when a hold that had started is let go before it completed. */
+export type HoldEvent = 'idle' | 'holding' | 'complete' | 'released';
 
 export class HoldToApprove {
   /** 0..1, for drawing the ring. */
   progress = 0;
   private gap = 0;
   private waitForRelease = false;
+  private released = false;
 
   constructor(private readonly cfg: { seconds: number; graceSeconds: number; drainPerSecond: number } = HOLD) {}
 
@@ -36,19 +38,34 @@ export class HoldToApprove {
    */
   update(dt: number, pressed: boolean, enabled: boolean): HoldEvent {
     const step = Math.min(Math.max(dt, 0), 0.1);
+    let endedEarly = false;
     if (!pressed) {
       this.gap += step;
-      if (this.gap > this.cfg.graceSeconds) this.waitForRelease = false;
+      if (this.gap > this.cfg.graceSeconds) {
+        this.waitForRelease = false;
+        // A real release ends this hold. The ring still drains so you see it, but the
+        // next pinch starts from nothing: one approval is one continuous hold.
+        endedEarly = !this.released && this.progress > 0;
+        this.released = true;
+      }
     }
 
     if (!enabled) {
       this.progress = 0;
       return 'idle';
     }
+    if (endedEarly) {
+      this.progress = Math.max(0, this.progress - step * this.cfg.drainPerSecond);
+      return 'released';
+    }
 
     if (pressed) {
       this.gap = 0;
       if (this.waitForRelease) return 'idle';
+      if (this.released) {
+        this.released = false;
+        this.progress = 0;
+      }
       this.progress = Math.min(1, this.progress + step / this.cfg.seconds);
       if (this.progress >= 1) {
         this.progress = 0;
@@ -73,5 +90,15 @@ export class HoldToApprove {
   reset(): void {
     this.progress = 0;
     this.gap = 0;
+  }
+
+  /**
+   * Cancel the hold for good: what was on the card changed, a conflict arrived or
+   * hand tracking was lost. The pinch still down must be let go before a new hold counts.
+   */
+  cancel(): void {
+    this.progress = 0;
+    this.gap = 0;
+    this.waitForRelease = true;
   }
 }

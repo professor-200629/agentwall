@@ -9,6 +9,7 @@ import {
   guestFrom,
   importLink,
   importText,
+  refreshState,
   savedCalendar,
   setDetails,
   shortLine,
@@ -21,14 +22,30 @@ import { STORAGE_KEY } from './logic/storage.js';
 
 const el = <T extends HTMLElement>(id: string) => document.getElementById(id) as T | null;
 
-/** The saved board belongs to the old calendar: start clean on the new one. */
-function restart(): void {
-  try {
-    localStorage.removeItem(STORAGE_KEY);
-  } catch {
-    // storage blocked: nothing was saved anyway
+/**
+ * Reload so the board starts on the new calendar.
+ *
+ * A newer read of YOUR calendar keeps the board: what you approved is checked
+ * against the new snapshot as the board starts, and anything it now overlaps is
+ * blocked there. Switching between the sample week and your own calendar clears
+ * the board: an approval belongs to the calendar it was made on.
+ */
+function restart(keepBoard = false): void {
+  if (!keepBoard) {
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+    } catch {
+      // storage blocked: nothing was saved anyway
+    }
   }
   location.reload();
+}
+
+let showStatus: () => void = () => {};
+
+/** A linked calendar was just read again (or could not be): show what the wall is using now. */
+export function showCalendarStatus(): void {
+  showStatus();
 }
 
 export function initSetup(workerUrl: string): void {
@@ -46,10 +63,19 @@ export function initSetup(workerUrl: string): void {
   if (!status || !msg || !file || !link || !read || !guest || !email || !topic || !owner || !save || !sample) return;
 
   const saved = savedCalendar();
-  const active = activeCalendar();
-  status.textContent = saved
-    ? `${active.label} · ${active.cal.busy.owner.length} busy times this week`
-    : 'Now showing: the sample week.';
+  showStatus = () => {
+    const active = activeCalendar();
+    const refresh = refreshState();
+    status.textContent = savedCalendar()
+      ? `${active.label} · ${active.cal.busy.owner.length} busy times this week`
+      : 'Now showing: the sample week.';
+    // Read while the page loaded: say if that failed, since the wall then shows the older read.
+    if (refresh.tried && !refresh.ok) {
+      msg.textContent = `Your link could not be read just now. ${refresh.error} The wall shows the last read; what you approved was checked against that.`;
+      msg.className = 'bad';
+    }
+  };
+  showStatus();
   sample.hidden = !saved;
   save.hidden = !saved;
   if (saved) {
@@ -74,8 +100,13 @@ export function initSetup(workerUrl: string): void {
       say(r.error, 'bad');
       return;
     }
-    say(`Read. ${r.busy} busy times in the next two working weeks. Restarting…`, 'good');
-    setTimeout(restart, 700);
+    // `saved` is what was there when the page loaded: your own calendar before, and again now.
+    const again = saved !== null;
+    say(
+      `Read. ${r.busy} busy times in the next two working weeks. ${again ? 'Checking what you approved against it…' : 'Restarting…'}`,
+      'good',
+    );
+    setTimeout(() => restart(again), 700);
   };
 
   file.addEventListener('change', () => {
@@ -105,7 +136,7 @@ export function initSetup(workerUrl: string): void {
   save.addEventListener('click', () => {
     if (setDetails(details())) {
       say('Saved. Restarting…', 'good');
-      setTimeout(restart, 500);
+      setTimeout(() => restart(), 500);
     } else {
       say('Read a calendar first.', 'bad');
     }
@@ -114,6 +145,6 @@ export function initSetup(workerUrl: string): void {
   sample.addEventListener('click', () => {
     useSample();
     say('Back to the sample week. Restarting…', 'good');
-    setTimeout(restart, 500);
+    setTimeout(() => restart(), 500);
   });
 }

@@ -1,9 +1,12 @@
 import { VisibilityState, World } from '@iwsdk/core';
 import projectOptions from 'virtual:iwsdk-project';
 import { refreshLinked } from './calendar-source.js';
-import { initSetup } from './setup.js';
+import { initSetup, showCalendarStatus } from './setup.js';
 import { renderSent } from './sent.js';
 import { activeCalendar } from './calendar-source.js';
+import { LEARN_KEY } from './logic/learn.js';
+import { QUEUE_KEY } from './logic/queue.js';
+import { STORAGE_KEY } from './logic/storage.js';
 import { freshUrl, needsReload, RELOAD_KEY } from './logic/version.js';
 import { unlockAudio } from './ui/sound.js';
 
@@ -40,12 +43,14 @@ initSetup(WORKER_URL);
 // The board is imported after that, because it picks its calendar when it loads.
 void refreshLinked(WORKER_URL)
   .catch(() => undefined)
-  .then(() =>
-    Promise.all([
+  .then(() => {
+    // A failed re-read keeps the last calendar; the page and the wall both say so.
+    showCalendarStatus();
+    return Promise.all([
       World.create(document.getElementById('scene-container') as HTMLDivElement, projectOptions),
       import('./board-system.js'),
-    ]),
-  )
+    ]);
+  })
   .then(([world, { BoardSystem }]) => {
   world.registerSystem(BoardSystem);
 
@@ -87,11 +92,37 @@ void refreshLinked(WORKER_URL)
     intro.hidden = false;
     showBtn.hidden = true;
   });
+  // Start over: the saved board (approvals, the example change), today's queue and learned rules.
+  const reset = document.getElementById('reset-board') as HTMLButtonElement | null;
+  const hasBoard = () => {
+    try {
+      return localStorage.getItem(STORAGE_KEY) !== null;
+    } catch {
+      return false;
+    }
+  };
+  if (reset) {
+    reset.hidden = !hasBoard();
+    reset.addEventListener('click', () => {
+      try {
+        for (const key of [STORAGE_KEY, QUEUE_KEY, LEARN_KEY]) localStorage.removeItem(key);
+      } catch {
+        // storage blocked: there was nothing to clear
+      }
+      location.reload();
+    });
+  }
   // Desktop preview: the list follows what you approve with the mouse.
   window.addEventListener('agentwall:saved', () => {
     const active = activeCalendar();
     renderSent(active.cal, active.real);
+    if (reset) reset.hidden = !hasBoard();
   });
+  // The list is also right on first load: yesterday's approvals, checked against today's calendar.
+  {
+    const active = activeCalendar();
+    renderSent(active.cal, active.real);
+  }
   world.visibilityState.subscribe((v) => {
     const flat = v === VisibilityState.NonImmersive;
     // Back on the page: what you approved in mixed reality, as a real email draft and calendar file.

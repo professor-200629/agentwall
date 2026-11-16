@@ -4,7 +4,7 @@ import { chooseDesk, DESK, lapPlacement } from '../src/logic/desk.js';
 import type { PlaneInput } from '../src/logic/placement.js';
 import { approve, buildReceipt, makePlan, unapprove } from '../src/logic/plan.js';
 import { freeSlots, schedule, type CalendarData } from '../src/logic/scheduler.js';
-import { sampleChange, stillFree, withGuestBusy } from '../src/logic/watch.js';
+import { exampleBlock, withExample } from '../src/logic/example-change.js';
 import { tradeOff, weekModel } from '../src/logic/week.js';
 
 const cal = calendarJson as CalendarData;
@@ -135,12 +135,13 @@ describe('receipt, Unsend and the agent keeping watch', () => {
     expect(unapprove(back)).toBe(back);
   });
 
-  it('the sample change lands on the approved slot, and the agent finds a new one', () => {
+  it('the example change lands on the approved slot, and the agent finds a new one', () => {
     const slot = schedule(cal).best!;
-    const changed = withGuestBusy(cal, sampleChange(slot));
-    expect(stillFree(cal, slot)).toBe(true);
-    expect(stillFree(changed, slot)).toBe(false);
+    const changed = withExample(cal, [exampleBlock(cal, slot)]);
+    const free = (c: CalendarData) => freeSlots(c).some((s) => s.id === slot.id);
+    expect(free(cal)).toBe(true);
+    expect(free(changed)).toBe(false);
     expect(schedule(changed).best!.id).not.toBe(slot.id);
-    expect(cal.busy.guest).toHaveLength(4); // the original is untouched
+    expect(cal.busy.owner).toHaveLength(11); // the original is untouched
   });
 });

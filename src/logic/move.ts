@@ -1,8 +1,8 @@
 /**
  * The third task: move one of your own meetings.
  *
- * You pinch a meeting on the week. The agent looks for another time this week
- * that is long enough and free on YOUR calendar, shows it on the wall like any
+ * You pinch a meeting on the week. The agent looks for the NEAREST other time this
+ * week that is long enough and free on YOUR calendar, shows it on the wall like any
  * other plan, and puts a "calendar change" card on your desk. Nothing moves
  * until you pinch and hold it. Rules ("only after 4 PM", "not Wed") apply.
  *
@@ -76,14 +76,38 @@ export function moveWindows(cal: CalendarData, m: Moving, constraint: Constraint
   );
 }
 
-function reason(cal: CalendarData, m: Moving, windows: Slot[], best: Slot | null): string {
-  if (!best) return `No other time this week has ${m.end - m.start} free minutes inside your rule.`;
+/**
+ * The same windows, nearest to where the meeting is now first. A tie (30 minutes
+ * earlier or later) goes to the later one. Until 16 Nov the first window of the
+ * WEEK was taken, so a Wednesday 3 PM meeting went to Tuesday 9 AM although
+ * Wednesday 2:30 and 3:30 were free, and the reason said Wednesday had no room.
+ */
+export function nearestFirst(m: Moving, windows: Slot[]): Slot[] {
+  const t0 = absMinutes(m.day, m.start);
+  const at = (s: Slot) => absMinutes(s.day, s.start);
+  return [...windows].sort((a, b) => Math.abs(at(a) - t0) - Math.abs(at(b) - t0) || at(b) - at(a));
+}
+
+/** One line that says what was searched and what was chosen, and nothing that was not checked. */
+function reason(m: Moving, windows: Slot[], best: Slot | null, rule: Constraint = {}): string {
+  const len = m.end - m.start;
+  if (!best) return `No other time this week has ${len} free minutes inside your rule.`;
   const when = `${short(best.day)} ${clock(best.start)}`;
-  const sameDay = best.day === m.day;
-  const days = new Set(windows.map((w) => w.day)).size;
+  if (best.day === m.day) {
+    const delta = best.start - m.start;
+    const by = Math.abs(delta) >= 60 && Math.abs(delta) % 60 === 0 ? `${Math.abs(delta) / 60} h` : `${Math.abs(delta)} min`;
+    return `${when} is the nearest free ${len} minutes: ${by} ${delta > 0 ? 'later' : 'earlier'}, same day.`;
+  }
+  // The meeting's own day was not searched at all when your rule leaves it out.
+  if (rule.notDays?.includes(m.day) || (rule.day !== undefined && rule.day !== m.day)) {
+    return `Your rule leaves out ${short(m.day)}, so ${when} is the nearest.`;
+  }
+  // Said only when it is true: no window on the meeting's own day was found.
+  const sameDay = windows.some((w) => w.day === m.day);
+  const inside = rule.after !== undefined || rule.before !== undefined ? ' inside your rule' : '';
   return sameDay
-    ? `${when} is the nearest free ${m.end - m.start} minutes, same day.`
-    : `No room left on ${short(m.day)}, so ${when} is first (${days} ${days === 1 ? 'day has' : 'days have'} room).`;
+    ? `${when} is the nearest free ${len} minutes.`
+    : `${short(m.day)} has no other free ${len} minutes${inside}, so ${when} is the nearest.`;
 }
 
 /** The card on the desk: a change on your own calendar. */
@@ -115,7 +139,7 @@ export function makeMovePlan(
   previous?: Plan,
   opts: PlanOptions = {},
 ): Plan {
-  const windows = moveWindows(cal, m, constraint);
+  const windows = nearestFirst(m, moveWindows(cal, m, constraint));
   const slot = opts.slot ?? windows[0] ?? null;
   const clash = (a: Slot, b: Slot) => a.day === b.day && a.start < b.end && b.start < a.end;
   const alternatives: Slot[] = [];
@@ -132,7 +156,7 @@ export function makeMovePlan(
     constraintText,
     slot,
     alternatives,
-    reason: opts.reason ?? reason(cal, m, windows, slot),
+    reason: opts.reason ?? reason(m, windows, slot, constraint),
     invite: slot ? moveNote(cal, m, slot) : null,
     approval: 'needs',
     version: (previous?.version ?? 0) + 1,

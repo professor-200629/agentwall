@@ -31,6 +31,22 @@ export interface MuralView {
   fresh: Set<string>;
   /** What the hand ray is over: a free time to pick, or a rule area to remove. */
   hover?: MuralHover | null;
+  /** A conflict under review: the old time stays where it was, beside what took it. */
+  review?: MuralReview | null;
+}
+
+export interface MuralReview {
+  /** The approved time that no longer fits. */
+  old: Slot;
+  /** The other times on offer (also the big buttons above the week). */
+  candidates: Slot[];
+  /** True while `chosen` is a time on trial, not an approved one. */
+  preview: boolean;
+  reason: string;
+  detail: string;
+  /** What the agent understood from what you said, or '' . */
+  note: string;
+  noteAi: boolean;
 }
 
 export interface MuralHover {
@@ -59,6 +75,9 @@ const PERSON = {
 const AGENT_BLOCK = { fill: 'rgba(70, 170, 120, 0.6)', line: 'rgba(120, 220, 160, 0.95)' };
 const STRIKE = 'rgba(255, 90, 80, 0.95)';
 const GOLD = '#f5c542';
+const RED = '#e5534b';
+/** A block the labelled example change added says so on the wall. */
+const EXAMPLE_MARK = '(example change)';
 
 function hatch(c: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, color: string): void {
   c.save();
@@ -89,6 +108,7 @@ function runs(cells: WeekCell[]): Array<{ first: WeekCell; count: number }> {
 
 export function drawMural(c: CanvasRenderingContext2D, w: number, h: number, v: MuralView): void {
   const { week } = v;
+  const rv = v.review ?? null;
   const g = muralGrid(w, h, week);
   const days = week.days.length;
   // Days the sweep has reached; the chosen slot lights up only at the end.
@@ -135,10 +155,12 @@ export function drawMural(c: CanvasRenderingContext2D, w: number, h: number, v: 
       c.fillStyle = k === 'buffer' ? 'rgba(255, 90, 80, 0.10)' : k === 'short' ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.04)';
       c.fillRect(x0, y0, cw, ch);
       if (i < scanned) {
-        hatch(c, x0, y0, cw, ch, k === 'rule' ? 'rgba(242, 184, 75, 0.35)' : 'rgba(255,255,255,0.10)');
+        // During a conflict review amber belongs to the decision alone: rule areas go grey.
+        const amber = k === 'rule' && !rv;
+        hatch(c, x0, y0, cw, ch, amber ? 'rgba(242, 184, 75, 0.35)' : 'rgba(255,255,255,0.10)');
         if (run.count >= 2 && k !== 'buffer') {
           font(c, 16, 600);
-          c.fillStyle = k === 'rule' ? COLORS.amber : COLORS.faint;
+          c.fillStyle = amber ? COLORS.amber : COLORS.faint;
           c.fillText(run.first.reason, x0 + 8, y0 + Math.min(ch / 2, 18));
         }
       }
@@ -149,12 +171,19 @@ export function drawMural(c: CanvasRenderingContext2D, w: number, h: number, v: 
   for (const b of week.blocks) {
     const i = week.days.indexOf(b.day);
     if (i < 0) continue;
-    const x0 = g.x(i) + 6;
+    let x0 = g.x(i) + 6;
     const y0 = g.y(Math.max(b.start, week.dayStart)) + 2;
     const y1 = g.y(Math.min(b.end, week.dayEnd)) - 2;
     if (y1 <= y0) continue;
-    const bw = g.colW - 12;
+    let bw = g.colW - 12;
     const isFresh = v.fresh.has(`${b.day}T${b.start}`);
+    // Two things at one time sit side by side, as on any calendar: the old time
+    // keeps the left half, the block that took it gets the right half.
+    const beside = rv !== null && b.day === rv.old.day && b.start < rv.old.end && b.end > rv.old.start;
+    if (beside) {
+      x0 += bw / 2 + 2;
+      bw = bw / 2 - 2;
+    }
     // Blocks the agent added (with your yes) are green: "Prep (agent)".
     const p = b.title.endsWith('(agent)') ? AGENT_BLOCK : PERSON[b.who];
     roundRect(c, x0, y0, bw, y1 - y0, 8);
@@ -166,13 +195,22 @@ export function drawMural(c: CanvasRenderingContext2D, w: number, h: number, v: 
     font(c, y1 - y0 > 30 ? 17 : 15, 600);
     c.fillStyle = COLORS.text;
     const who = b.who === 'you' ? 'You' : 'Sam';
-    let text = `${who} · ${b.title}`;
-    while (text.length > 4 && c.measureText(text).width > bw - 14) text = `${text.slice(0, -2)}…`;
+    const example = b.title.endsWith(EXAMPLE_MARK);
+    const tag = example ? (isFresh ? 'NEW · EXAMPLE' : 'EXAMPLE') : isFresh ? 'NEW' : '';
+    const tall = y1 - y0 > 40;
+    let text = `${who} · ${example ? b.title.slice(0, -EXAMPLE_MARK.length).trim() : b.title}`;
+    font(c, 14, 800);
+    const tagW = tag ? c.measureText(tag).width + 10 : 0;
+    font(c, y1 - y0 > 30 ? 17 : 15, 600);
+    // A tall block has room for the tag on its own line; a short one shares the line.
+    const room = bw - 14 - (tall ? 0 : tagW);
+    while (text.length > 4 && c.measureText(text).width > room) text = `${text.slice(0, -2)}…`;
     c.fillText(text, x0 + 7, y0 + Math.min((y1 - y0) / 2, 15));
-    if (isFresh) {
+    if (tag) {
       font(c, 14, 800);
-      c.fillStyle = '#ffd5d0';
-      c.fillText('NEW', x0 + bw - 40, y0 + Math.min((y1 - y0) / 2, 15));
+      c.fillStyle = isFresh ? '#ffd5d0' : COLORS.muted;
+      if (tall) c.fillText(tag, x0 + 7, y0 + 34);
+      else c.fillText(tag, x0 + bw - tagW, y0 + Math.min((y1 - y0) / 2, 15));
     }
     if (i < scanned && !isFresh) {
       c.strokeStyle = STRIKE;
@@ -192,8 +230,77 @@ export function drawMural(c: CanvasRenderingContext2D, w: number, h: number, v: 
     c.fillRect(g.x(scanned), MURAL.headerH, 4, g.rows * g.rowH);
   }
 
+  // A conflict under review: the old time stays put, marked; the other times are outlined.
+  if (done && rv) {
+    const i = week.days.indexOf(rv.old.day);
+    if (i >= 0) {
+      const x0 = g.x(i) + 6;
+      const y0 = g.y(Math.max(rv.old.start, week.dayStart)) + 2;
+      const rows = Math.max(1, (rv.old.end - rv.old.start) / week.step);
+      const cw = (g.colW - 12) / 2 - 2;
+      const ch = g.rowH * rows - 4;
+      roundRect(c, x0, y0, cw, ch, 6);
+      c.fillStyle = 'rgba(229, 83, 75, 0.22)';
+      c.fill();
+      hatch(c, x0, y0, cw, ch, 'rgba(255, 120, 110, 0.55)');
+      c.lineWidth = 3;
+      c.strokeStyle = RED;
+      roundRect(c, x0, y0, cw, ch, 6);
+      c.stroke();
+      // The old time, crossed out.
+      const t = clock(rv.old.start);
+      font(c, 16, 800);
+      c.fillStyle = COLORS.text;
+      const ty = y0 + Math.min(ch / 2, 13);
+      c.fillText(`✕ ${t}`, x0 + 6, ty);
+      c.fillRect(x0 + 6, ty, c.measureText(`✕ ${t}`).width, 2);
+      // The label, above the time (below it when the time is in the first row).
+      font(c, 15, 800);
+      const label = 'CONFLICT';
+      const lw = c.measureText(label).width + 16;
+      const ly = y0 - 26 < MURAL.headerH ? y0 + ch + 3 : y0 - 26;
+      roundRect(c, x0, ly, lw, 23, 11);
+      c.fillStyle = RED;
+      c.fill();
+      c.fillStyle = '#ffffff';
+      c.fillText(label, x0 + 8, ly + 12);
+    }
+    for (const cand of rv.candidates) {
+      const ci = week.days.indexOf(cand.day);
+      if (ci < 0 || (v.chosen && v.chosen.id === cand.id)) continue;
+      const rows = Math.max(1, (cand.end - cand.start) / week.step);
+      c.setLineDash([8, 6]);
+      c.lineWidth = 3;
+      c.strokeStyle = COLORS.link;
+      roundRect(c, g.x(ci) + 4, g.y(cand.start) + 1, g.colW - 8, g.rowH * rows - 2, 6);
+      c.stroke();
+      c.setLineDash([]);
+      font(c, 16, 800);
+      c.fillStyle = COLORS.link;
+      c.fillText(clock(cand.start), g.x(ci) + 12, g.y(cand.start) + g.rowH / 2 + 1);
+    }
+    if (v.chosen && rv.preview) {
+      // The time on trial: amber, the colour of the decision that is waiting for your hold.
+      const pi = week.days.indexOf(v.chosen.day);
+      if (pi >= 0) {
+        const x0 = g.x(pi) + 3;
+        const y0 = g.y(v.chosen.start);
+        const rows = Math.max(1, (v.chosen.end - v.chosen.start) / week.step);
+        roundRect(c, x0, y0, g.colW - 6, g.rowH * rows, 7);
+        c.fillStyle = 'rgba(242, 184, 75, 0.32)';
+        c.fill();
+        c.lineWidth = 4;
+        c.strokeStyle = COLORS.amber;
+        c.stroke();
+        font(c, 16, 800);
+        c.fillStyle = COLORS.text;
+        c.fillText(`${clock(v.chosen.start)} · PREVIEW`, x0 + 9, y0 + g.rowH / 2 + 1);
+      }
+    }
+  }
+
   // Runner-ups outlined; the chosen slot in gold (only when the sweep is done).
-  if (done) {
+  if (done && !(rv && (rv.preview || !v.chosen))) {
     for (const alt of v.alternatives) {
       const i = week.days.indexOf(alt.day);
       if (i < 0) continue;
@@ -264,6 +371,31 @@ export function drawMural(c: CanvasRenderingContext2D, w: number, h: number, v: 
 
   // Footer: legend + the agent's reason.
   const fy = h - MURAL.footerH;
+  if (rv) {
+    // In a review the footer says one thing: what is wrong, and what the agent understood.
+    font(c, 15, 800);
+    const tagW = c.measureText('CONFLICT').width + 16;
+    roundRect(c, MURAL.axisW, fy + 10, tagW, 24, 12);
+    c.fillStyle = RED;
+    c.fill();
+    c.fillStyle = '#ffffff';
+    c.fillText('CONFLICT', MURAL.axisW + 8, fy + 23);
+    const maxW = w - MURAL.axisW - tagW - 30;
+    let line = `${rv.reason} · ${rv.detail}`;
+    let size = 21;
+    font(c, size, 700);
+    while (size > 14 && c.measureText(line).width > maxW) font(c, --size, 700);
+    while (line.length > 4 && c.measureText(line).width > maxW) line = `${line.slice(0, -2)}…`;
+    c.fillStyle = COLORS.text;
+    c.fillText(line, MURAL.axisW + tagW + 12, fy + 23);
+    let second = rv.note || (rv.preview ? 'The old time stays here until you hold the card on your desk.' : 'Pinch a time above to try it. Nothing changes until you hold the card.');
+    font(c, 18, 600);
+    while (second.length > 4 && c.measureText(second).width > w - MURAL.axisW - 20) second = `${second.slice(0, -2)}…`;
+    c.fillStyle = rv.note && rv.noteAi ? COLORS.link : COLORS.muted;
+    c.fillText(second, MURAL.axisW, fy + 51);
+    c.textBaseline = 'alphabetic';
+    return;
+  }
   font(c, 15, 700);
   const legend: Array<[string, string]> = [
     [PERSON.you.fill, 'You busy'],

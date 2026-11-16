@@ -79,6 +79,8 @@ export function buildRealCalendar(sample: CalendarData, source: RealSource, now:
   return {
     ...sample,
     timezone: zoneLabel(now),
+    // Your calendar is in this machine's wall clock; the sample's fixed offset does not apply.
+    utcOffsetMinutes: undefined,
     now: nowStamp(now),
     days,
     source: 'yours',

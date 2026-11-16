@@ -125,7 +125,7 @@ xr('set-select-value', { device: 'hand-right', value: 0 });
 await sleep(2500);
 const box = hook('outbox');
 check('held and sent to the demo outbox', box.length === 1 && box[0].status === 'sent' && box[0].minutes === 30, JSON.stringify(box.map((o) => [o.status, o.minutes])));
-check('no sample "dentist" change on a real calendar', hook('flow').watchFired === false && hook('flow').conflict === null);
+check('no example change on a real calendar: the control is not offered for a calendar from a file', hook('calendarControl') === null && hook('flow').conflict === null && hook('review') === null);
 
 // ---------- 4. Back on the page: a real email draft and calendar file ----------
 try { xr('exit'); } catch (e) { console.log('      exit:', e.message.slice(0, 120)); }
@@ -135,10 +135,78 @@ check('"Approved by you" lists the invite', sent.hidden === false && /Call about
 check('it offers an email draft in your own mail app', sent.links.some((l) => l[0] === 'Open email draft' && l[1].startsWith('mailto:priya@example.com?subject=')), JSON.stringify(sent.links));
 check('and a calendar file', sent.links.some((l) => /calendar/.test(l[0]) && l[1].startsWith('blob:') && l[2] === 'agent-wall-event.ics'));
 const icsOut = evalPage(`fetch(document.querySelector('#sent-box a[download]').href).then((r) => r.text())`);
-check('the file holds the approved time', new RegExp(`DTSTART:${dayId(days[1]).replace(/-/g, '')}T170000`).test(icsOut) && /SUMMARY:Call about the Q3 budget/.test(icsOut), icsOut.split('\r\n').filter((l) => /DTSTART|SUMMARY/.test(l)).join(' | '));
+// 5:00 PM on this machine's wall clock, written as the instant in UTC (the same moment in any time zone).
+check('the file holds the approved instant', icsOut.includes(`DTSTART:${utc(days[1], 17, 0)}`) && /SUMMARY:Call about the Q3 budget/.test(icsOut), icsOut.split('\r\n').filter((l) => /DTSTART|SUMMARY/.test(l)).join(' | '));
 shot('start-page-approved');
 
-// ---------- 5. Back to the sample week ----------
+// ---------- 5. A newer file with a new event over the approved time ----------
+const approved = `${dayId(days[1])}T17:00`;
+const ics2 = ics.replace('END:VCALENDAR', `${ev('new-one', days[1], 16, 45, 17, 30, 'PRIVATE: dentist')}\r\nEND:VCALENDAR`);
+const file2 = join(dir, 'test2.ics');
+writeFileSync(file2, ics2);
+page({ do: 'open', selector: '#cal-setup' });
+page({ do: 'file', selector: '#cal-file', path: file2 });
+await sleep(5500); // it reads, says so, then reloads; the board checks what was approved as it starts
+c = hook('calendar');
+let kept = hook('outbox');
+check('the newer read is on the wall (one more busy time) and the approval was kept, not wiped', c.real === true && c.busy === 10 && kept.length === 1 && kept[0].slotId === approved, `busy=${c.busy} outbox=${kept.length}`);
+check('it is blocked at once: the same check as the example', kept[0].blocked?.why === 'conflict' && /overlaps a new busy block$/.test(kept[0].blocked.text) && !/dentist/i.test(kept[0].blocked.text), JSON.stringify(kept[0].blocked));
+let rv = hook('review');
+check('the review is open before anything else, and says what is not known', rv?.old === approved && rv.detail === 'Guest availability unknown' && hook('flow').card === null, JSON.stringify(rv && [rv.old, rv.detail, rv.candidates.map((x) => x.label)]));
+const gone = evalPage(`(() => { const li = document.querySelector('#sent-list li'); return { blocked: li?.classList.contains('blocked'), state: li?.dataset.state, links: li?.querySelectorAll('a').length, buttons: li?.querySelectorAll('button').length, why: li?.querySelector('.why')?.textContent }; })()`);
+check('start page: email draft, calendar file and copy are gone for it', gone.blocked === true && gone.state === 'conflict' && gone.links === 0 && gone.buttons === 0 && /CONFLICT/.test(gone.why), JSON.stringify(gone));
+check('no link made for it is left behind', evalPage(`document.querySelectorAll('#sent-box a[download]').length`) === 0);
+shot('start-page-blocked');
+
+// Replace it in the room: a trial, then one hold.
+try { xr('enter'); } catch (e) { console.log('      enter:', e.message.slice(0, 120)); }
+await sleep(1500);
+xr('set-input-mode', { mode: 'hand' });
+xr('set-connected', { device: 'hand-right', connected: true });
+xr('set-transform', { device: 'headset', position: { x: 0, y: 1.2, z: 0 }, orientation: { pitch: 0, yaw: 0, roll: 0 } });
+hook('restart');
+await sleep(2500);
+hook('setHoldSeconds', 1);
+hook('setUnsendSeconds', 1);
+const aimAt = (p) => {
+  xr('set-transform', { device: 'hand-right', position: { x: 0.18, y: 1.0, z: -0.3 }, orientation: { pitch: 0, yaw: 0, roll: 0 } });
+  xr('look-at', { device: 'hand-right', target: { x: p[0], y: p[1], z: p[2] } });
+};
+aimAt(hook('targets').cand0);
+await sleep(300);
+xr('select', { device: 'hand-right', duration: 0.2 });
+await sleep(2500);
+const trial = hook('plan');
+check('a pinched time is a draft on your own calendar, in place of the old one', trial?.approval === 'needs' && trial.slot?.id !== approved && trial.replaces === kept[0].id && /^Call about the Q3 budget: /.test(trial.invite.subject), `${trial?.slot?.id} ${trial?.approval}`);
+shot('wall-your-calendar-conflict');
+aimAt(hook('targets').invite);
+await sleep(300);
+xr('set-select-value', { device: 'hand-right', value: 1 });
+await sleep(1800);
+xr('set-select-value', { device: 'hand-right', value: 0 });
+await sleep(3000);
+kept = hook('outbox');
+const was = kept.find((o) => o.slotId === approved);
+const now = kept.find((o) => o.slotId === trial.slot.id);
+check('one hold: the old one is superseded, the new one carries your calendar and its instant', was?.blocked?.why === 'superseded' && now && !now.blocked && now.source === 'yours' && /Z$/.test(now.startUtc ?? ''), JSON.stringify(kept.map((o) => [o.slotId, o.blocked?.why ?? 'ok', o.source])));
+try { xr('exit'); } catch (e) { console.log('      exit:', e.message.slice(0, 120)); }
+await sleep(1500);
+const icsNew = evalPage(`fetch(document.querySelector('#sent-box a[download]').href).then((r) => r.text())`);
+const want = new Date(now.startUtc).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+check('its calendar file holds that instant in UTC, so it is the same moment in any time zone', icsNew.includes(`DTSTART:${want}`) && new Date(now.startUtc).getHours() * 60 + new Date(now.startUtc).getMinutes() === Number(trial.slot.id.slice(11, 13)) * 60 + Number(trial.slot.id.slice(14, 16)), icsNew.split('\r\n').filter((l) => /DTSTART/.test(l)).join(' | '));
+
+// ---------- 6. A link that cannot be read keeps what was known, and says so ----------
+const before = hook('calendar').busy;
+evalPage(`(() => { const k = 'agentwall.calendar.v1'; const d = JSON.parse(localStorage.getItem(k)); d.source = 'link'; d.url = 'https://calendar.google.com/calendar/ical/nobody/basic.ics'; localStorage.setItem(k, JSON.stringify(d)); return 1; })()`);
+cli(['browser', 'reload']);
+await sleep(6500);
+c = hook('calendar');
+const said = evalPage(`document.getElementById('cal-msg').textContent`);
+check('a failed re-read keeps the last calendar and every approval', c.real === true && c.busy === before && hook('outbox').length === 2, `busy=${c.busy} outbox=${hook('outbox').length}`);
+check('and both the wall and the start page say the re-read failed', /REFRESH FAILED/.test(c.label) && /could not be read just now/.test(said), `${c.label} | ${said}`);
+check('a linked calendar offers "Refresh my calendar" on the wall', hook('calendarControl')?.label === '⟳ Refresh my calendar', JSON.stringify(hook('calendarControl')));
+
+// ---------- 7. Back to the sample week ----------
 page({ do: 'open', selector: '#cal-setup' });
 page({ do: 'click', selector: '#cal-sample' });
 await sleep(4500);

@@ -98,7 +98,8 @@ shot('move-offer');
 await tap('replan:yes'); // Find a time
 await waitIdle();
 let plan = hook('plan');
-check('yes: the agent finds the nearest time the 90 minutes fit', plan.moving?.title === 'Design review' && plan.slot?.id === `${TUE}T13:00` && plan.approval === 'needs', `${plan.task} -> ${plan.slot?.id}`);
+// 1:30 PM and 2:30 PM are both 30 minutes away; the later one is taken (not 1:00 PM, the first of the day).
+check('yes: the agent finds the nearest time the 90 minutes fit', plan.moving?.title === 'Design review' && plan.slot?.id === `${TUE}T14:30` && plan.approval === 'needs' && /nearest free 90 minutes: 30 min later, same day/.test(plan.reason), `${plan.task} -> ${plan.slot?.id} | ${plan.reason}`);
 check('the card on the desk is a calendar change, not an email', /^Design review \(moved\): /.test(plan.invite.subject) && /^Your calendar/.test(plan.invite.to), `${plan.invite.to} | ${plan.invite.subject}`);
 check('its old time no longer blocks it on the week', cell(TUE, 840)?.kind !== 'busy', JSON.stringify(cell(TUE, 840)));
 shot('move-plan');

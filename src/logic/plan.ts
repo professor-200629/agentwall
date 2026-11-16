@@ -63,6 +63,8 @@ export interface Plan {
   by: 'ai' | 'rules' | 'you';
   /** Why the rules were used instead of the AI, when that happened. */
   note: string;
+  /** Set on a replacement: the id of the approved item whose time no longer fits. */
+  replaces?: string;
 }
 
 /** Optional overrides when the AI chose the slot or wrote the email. */
@@ -160,6 +162,25 @@ export function isLinked(plan: Plan): boolean {
   return plan.slot === null ? plan.invite === null : plan.invite?.slotId === plan.slot.id;
 }
 
+export type ItemKind = 'call' | 'focus' | 'move' | 'reminder';
+
+/**
+ * Why an approved item must not be handed off any more.
+ * - conflict: the latest calendar has a busy time over it (stays until you replace it)
+ * - superseded: you approved a replacement (for good)
+ * - source: it was approved on another calendar than the one in use
+ * - changed: the stored words are not the words you held
+ */
+export interface Blocked {
+  why: 'conflict' | 'superseded' | 'source' | 'changed';
+  /** One plain line, e.g. "Tue 1:00 PM overlaps a new busy block". */
+  text: string;
+  /** ISO time it was found. */
+  at: string;
+  /** superseded: the id of the approval that replaced this one. */
+  by?: string;
+}
+
 /** An approved invite in the demo outbox. Nothing is ever really sent. */
 export interface OutboxItem {
   id: string;
@@ -175,6 +196,37 @@ export interface OutboxItem {
   status?: 'sending' | 'sent';
   /** What the rules, the AI and the user each did (shown on the desk card). */
   receipt?: ReceiptLine[];
+  /** What was approved: a call, a focus block, a moved meeting, a reminder. */
+  kind?: ItemKind;
+  /** The calendar it was approved on. Older records have none (see review.ts). */
+  source?: 'sample' | 'yours';
+  /** A mark of exactly the words and time on the card when you held it. */
+  reviewed?: string;
+  /** The approved start as a moment in time (ISO, UTC): the calendar file means this instant anywhere. */
+  startUtc?: string;
+  /** The rule in force when you approved; a replacement is looked for inside it. */
+  rule?: Constraint;
+  /** The approved item this one replaced after a conflict. */
+  replaces?: string;
+  /** Set while the item must not be handed off. */
+  blocked?: Blocked;
+  /** The labelled example approval that "Try a calendar change" puts there. You did not hold it. */
+  example?: boolean;
+}
+
+/** FNV-1a over the text, as 8 hex characters. Not a secret: it only notices a change. */
+function fnv(text: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(16).padStart(8, '0');
+}
+
+/** The mark of what was reviewed: who, the words, the time and the length. */
+export function reviewedMark(item: Pick<OutboxItem, 'to' | 'subject' | 'body' | 'slotId' | 'minutes'>): string {
+  return fnv(JSON.stringify([item.to, item.subject, item.body, item.slotId, item.minutes ?? null]));
 }
 
 export interface ReceiptLine {
@@ -201,6 +253,8 @@ export function buildReceipt(
   plan: Plan,
   ruledOut: number,
   approvedLabel: string,
+  /** A replacement: the old time it took over from, e.g. "Tue 1:00 PM". */
+  replaced = '',
 ): ReceiptLine[] {
   const first = dayLabel(cal.days[0]);
   const last = dayLabel(cal.days[cal.days.length - 1]);
@@ -213,7 +267,9 @@ export function buildReceipt(
         : { tag: 'RULES', text: `Picked ${pick} and ${plan.moving ? 'drafted the calendar change' : isFocus(plan) ? 'drafted the calendar block' : 'wrote the email'}.` };
   return [
     { tag: 'RULES', text: `Read ${cal.source === 'yours' ? 'your own week' : 'the sample week'} (${first.short.split(' ')[0]} ${first.short.split(' ')[1]}–${last.short.split(' ')[0]} ${last.short.split(' ')[1]} ${last.short.split(' ')[2]}).` },
-    { tag: 'RULES', text: `Ruled out ${ruledOut} half hours: busy, too soon or your rule.` },
+    replaced
+      ? { tag: 'RULES', text: `Blocked the old one (${replaced}): that time is busy now.` }
+      : { tag: 'RULES', text: `Ruled out ${ruledOut} half hours: busy, too soon or your rule.` },
     picked,
     { tag: 'YOU', text: `Held to approve at ${approvedLabel}.` },
     { tag: 'DEMO', text: 'In the demo outbox. Nothing was sent.' },
@@ -225,7 +281,11 @@ export function buildReceipt(
  * approve (no invite, or it is already approved), so a double pinch can never
  * put two copies in the outbox.
  */
-export function approve(plan: Plan, approvedAt: string): { plan: Plan; item: OutboxItem } | null {
+export function approve(
+  plan: Plan,
+  approvedAt: string,
+  ctx: { source?: 'sample' | 'yours'; startUtc?: string | null; example?: boolean } = {},
+): { plan: Plan; item: OutboxItem } | null {
   if (!plan.invite || plan.approval !== 'needs' || !isLinked(plan)) return null;
   const item: OutboxItem = {
     id: `${plan.invite.slotId}#v${plan.version}`,
@@ -235,7 +295,15 @@ export function approve(plan: Plan, approvedAt: string): { plan: Plan; item: Out
     slotId: plan.invite.slotId,
     approvedAt,
     minutes: plan.slot ? plan.slot.end - plan.slot.start : undefined,
+    kind: plan.moving ? 'move' : isFocus(plan) ? 'focus' : 'call',
+    rule: plan.constraint,
   };
+  // The approval belongs to these exact words and this exact time, on this calendar.
+  item.reviewed = reviewedMark(item);
+  if (ctx.source) item.source = ctx.source;
+  if (ctx.startUtc) item.startUtc = ctx.startUtc;
+  if (ctx.example) item.example = true;
+  if (plan.replaces) item.replaces = plan.replaces;
   return { plan: { ...plan, approval: 'approved', version: plan.version + 1 }, item };
 }
 

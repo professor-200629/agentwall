@@ -35,7 +35,7 @@ shot('2-unsend-window');
 await sleep(14000);
 console.log('outbox', JSON.stringify(hook('outbox').map((o) => [o.status, o.receipt?.length])));
 shot('3-receipt');
-hook('watchNow'); await sleep(800);
+await hook('calendarChange'); await sleep(800);
 console.log('flow', JSON.stringify(hook('flow')));
 view(-8); await sleep(400);
 shot('4-replan');

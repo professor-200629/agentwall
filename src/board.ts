@@ -26,9 +26,21 @@ import {
 import { CHIPS, type ChipLook } from './chips.js';
 import type { OutboxItem, Plan } from './logic/plan.js';
 import { BOARD } from './logic/placement.js';
+import { blockedWord, itemSlot, kindOf } from './logic/review.js';
+import { clock, dayLabel, type Slot } from './logic/scheduler.js';
 import type { WeekModel } from './logic/week.js';
 import { CanvasPanel, COLORS, drawWrapped, font, pill, PX_PER_M, roundRect } from './ui/canvas-panel.js';
-import { CHIP_FONT_PX, drawAltRow, drawChip, drawGlow, drawInviteCard, drawTray, type InviteExtras } from './ui/cards.js';
+import {
+  CHIP_FONT_PX,
+  drawAltRow,
+  drawCandidate,
+  drawChip,
+  drawGlow,
+  drawInviteCard,
+  drawReviewBar,
+  drawTray,
+  type InviteExtras,
+} from './ui/cards.js';
 import { drawMural, muralGrid, type MuralHover, type MuralView } from './ui/mural.js';
 import { playLand, playWhoosh } from './ui/sound.js';
 
@@ -80,6 +92,26 @@ export const LAYOUT = (() => {
   const voiceW = px(64);
   const voice = { x: move.x - moveW / 2 - px(12) - voiceW / 2, y: move.y, w: voiceW, h: moveH };
   const replan = { x: 0, y: mural.y - mural.h / 2 + 0.135, w: 0.8, h: 0.13 };
+  // The calendar control sits beside the outbox tray: it acts on what you approved.
+  const calW = px(262);
+  const trayW = W - margin * 2 - calW - px(12);
+  const tray = { x: left + trayW / 2, y: -H / 2 + margin + trayH / 2, w: trayW, h: trayH };
+  const calendar = { x: W / 2 - margin - calW / 2, y: tray.y, w: calW, h: trayH };
+  // Conflict review: one bar where the chips were (they are hidden meanwhile, except the mic),
+  // with two big "try this time" targets. About 22 x 9 cm each: a hand ray that wobbles
+  // 1 degree moves about 3 cm at 2 m.
+  const mic = chips[chips.length - 1];
+  const gap = px(12);
+  const barRight = mic.x - mic.w / 2 - gap;
+  const barTop = H / 2 - px(140);
+  const barBottom = H / 2 - px(250);
+  const review = { x: (left + barRight) / 2, y: (barTop + barBottom) / 2, w: barRight - left, h: barTop - barBottom };
+  const cancelW = px(116);
+  const candH = review.h - px(18);
+  const candW = Math.min(px(224), Math.max(px(150), (review.w - px(300) - cancelW - gap * 4) / 2));
+  const reviewCancel = { x: barRight - gap - cancelW / 2, y: review.y, w: cancelW, h: candH };
+  const cand1 = { x: reviewCancel.x - cancelW / 2 - gap - candW / 2, y: review.y, w: candW, h: candH };
+  const cand0 = { x: cand1.x - candW - gap, y: review.y, w: candW, h: candH };
   return {
     chips,
     mural,
@@ -89,7 +121,13 @@ export const LAYOUT = (() => {
     replan,
     replanYes: { x: replan.x + 0.17, y: replan.y, w: 0.14, h: 0.07 },
     replanNo: { x: replan.x + 0.32, y: replan.y, w: 0.13, h: 0.07 },
-    tray: { x: 0, y: -H / 2 + margin + trayH / 2, w: W - margin * 2, h: trayH },
+    tray,
+    calendar,
+    review,
+    reviewCancel,
+    candidates: [cand0, cand1],
+    /** Room for the review bar's words, left of the first target (canvas pixels). */
+    reviewTextPx: Math.max(120, (cand0.x - candW / 2 - gap - left) * PX_PER_M - 30),
   };
 })();
 
@@ -115,6 +153,35 @@ export interface AgentCardView {
   yes: string;
   no: string;
   tone: 'warn' | 'next';
+  /** On an empty board: the one line that says where to start (instead of the default). */
+  hint?: string;
+}
+
+/** A conflict under review: the bar above the week, and the marks on the week itself. */
+export interface ReviewView {
+  /** "CONFLICT", or "CONFLICT · EXAMPLE CHANGE" for the labelled example. */
+  title: string;
+  reason: string;
+  detail: string;
+  /** What the agent understood from what you said ('' when nothing was said). */
+  note: string;
+  noteAi: boolean;
+  candidates: Array<{ label: string; why: string; slot: Slot }>;
+  /** Which candidate is on trial, or null. */
+  trial: number | null;
+  /** The back-out button: "Cancel" a trial, "Not now" the review. */
+  cancel: string;
+  /** The old time. It stays on the wall. */
+  old: Slot;
+  /** True while the card on the desk is a trial, not an approval. */
+  preview: boolean;
+}
+
+/** The compact control beside the outbox: try the example change, review a conflict, or re-read your link. */
+export interface CalendarButtonView {
+  label: string;
+  sub: string;
+  primary: boolean;
 }
 
 export interface BoardView {
@@ -123,6 +190,7 @@ export interface BoardView {
   invite: InviteExtras;
   card: AgentCardView | null;
   fresh: Set<string>;
+  review: ReviewView | null;
 }
 
 export class Board {
@@ -156,6 +224,23 @@ export class Board {
     new CanvasPanel(LAYOUT.replanYes.w, LAYOUT.replanYes.h, 'replan-yes'),
     new CanvasPanel(LAYOUT.replanNo.w, LAYOUT.replanNo.h, 'replan-no'),
   ];
+  private reviewBar = new CanvasPanel(LAYOUT.review.w, LAYOUT.review.h, 'review-bar');
+  /** The two big "try this time" targets of a conflict review. */
+  readonly candidateButtons = LAYOUT.candidates.map((r, i) => new CanvasPanel(r.w, r.h, `candidate-${i}`));
+  readonly reviewCancel = new CanvasPanel(LAYOUT.reviewCancel.w, LAYOUT.reviewCancel.h, 'review-cancel');
+  readonly calendarButton = new CanvasPanel(LAYOUT.calendar.w, LAYOUT.calendar.h, 'calendar-change');
+  private review: ReviewView | null = null;
+  private reviewKey = '';
+  private hoverCand: number | null = null;
+  private hoverCancel = false;
+  private calendarLook: { view: CalendarButtonView | null; hovered: boolean } | null = null;
+  /** The card on the desk is blocked (a conflict): no amber glow, nothing to approve. */
+  private inviteBlocked = false;
+  /** Says what the ring approves, e.g. "HOLD TO APPROVE · Wed 5:30 PM". */
+  private holdLabel = new CanvasPanel(0.4, 0.052, 'hold-label');
+  private holdText = '';
+  /** Honour "reduce motion": no sweep and no flight, the labels carry the link. */
+  reducedMotion = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
   private cue = new CanvasPanel(BOARD.width + 0.08, BOARD.height + 0.08, 'wall-cue');
   /** A tab under the board: "the card is on your desk", shown when the desk is out of view. */
   private deskHint = new CanvasPanel(DESK_HINT.w, DESK_HINT.h, 'desk-hint');
@@ -212,6 +297,10 @@ export class Board {
     this.add(this.object, this.replanButtons[1].mesh, LAYOUT.replanNo.x, LAYOUT.replanNo.y, Z.button, 6);
     this.add(this.object, this.moveButton.mesh, LAYOUT.move.x, LAYOUT.move.y, Z.pill, 4);
     this.add(this.object, this.voiceButton.mesh, LAYOUT.voice.x, LAYOUT.voice.y, Z.pill, 4);
+    this.add(this.object, this.calendarButton.mesh, LAYOUT.calendar.x, LAYOUT.calendar.y, Z.pill, 4);
+    this.add(this.object, this.reviewBar.mesh, LAYOUT.review.x, LAYOUT.review.y, Z.replan, 5);
+    this.candidateButtons.forEach((b, i) => this.add(this.object, b.mesh, LAYOUT.candidates[i].x, LAYOUT.candidates[i].y, Z.button, 6));
+    this.add(this.object, this.reviewCancel.mesh, LAYOUT.reviewCancel.x, LAYOUT.reviewCancel.y, Z.button, 6);
     this.add(this.object, this.startGlow.mesh, LAYOUT.chips[0].x, LAYOUT.chips[0].y, Z.pill - 0.002, 3);
     this.startGlow.draw((c, w, h) => {
       c.shadowColor = COLORS.link;
@@ -255,6 +344,10 @@ export class Board {
     });
     hitPad(this.moveButton.mesh, LAYOUT.move.w, LAYOUT.move.h, px(14), px(12));
     hitPad(this.voiceButton.mesh, LAYOUT.voice.w, LAYOUT.voice.h, px(6), px(12));
+    // Pads meet halfway across the gaps, so a wobbling ray never falls between two targets.
+    this.candidateButtons.forEach((b, i) => hitPad(b.mesh, LAYOUT.candidates[i].w, LAYOUT.candidates[i].h, px(6), px(9)));
+    hitPad(this.reviewCancel.mesh, LAYOUT.reviewCancel.w, LAYOUT.reviewCancel.h, px(6), px(9));
+    hitPad(this.calendarButton.mesh, LAYOUT.calendar.w, LAYOUT.calendar.h, px(5), px(10));
     this.setVoiceButton(true, false);
 
     // Palm cue: label + progress ring, hidden until you hold a palm toward your face.
@@ -308,13 +401,27 @@ export class Board {
     disc.renderOrder = 6;
     track.renderOrder = 7;
     this.ringFill.renderOrder = 8;
+    this.holdLabel.mesh.position.set(0, -0.122, 0.002);
+    this.holdLabel.mesh.renderOrder = 8;
+    this.holdLabel.mesh.visible = false;
+    this.ring.add(this.holdLabel.mesh);
     this.ring.position.set(0, 0, 0.012);
     this.ring.visible = false;
     this.desk.add(this.ring);
     this.desk.scale.setScalar(INVITE.deskScale);
     this.desk.visible = false;
 
-    for (const m of [this.mural, this.glow, this.replanPanel, ...this.altRows, ...this.replanButtons, this.cue]) {
+    for (const m of [
+      this.mural,
+      this.glow,
+      this.replanPanel,
+      ...this.altRows,
+      ...this.replanButtons,
+      this.cue,
+      this.reviewBar,
+      ...this.candidateButtons,
+      this.reviewCancel,
+    ]) {
       m.mesh.visible = false;
     }
     this.glow.draw((c, w, h) => drawGlow(c, w, h, GLOW_PAD * PX_PER_M * 0.5));
@@ -497,7 +604,7 @@ export class Board {
     const slotId = view.plan?.invite ? (view.plan.slot?.id ?? null) : null;
     if (slotId !== this.flySlotId) {
       this.flySlotId = slotId;
-      if (slotId) {
+      if (slotId && !this.reducedMotion) {
         this.flyPending = true;
         this.flyT = -1;
         this.flyDur = (animate ? FLY.newPlanSeconds : FLY.pickSeconds) * this.flySlowdown;
@@ -506,15 +613,29 @@ export class Board {
     this.plan = view.plan;
     this.week = view.week;
     this.fresh = view.fresh;
+    this.inviteBlocked = view.invite.conflict !== null;
+
+    // Conflict review: the bar and its targets replace the chips (one thing to do at a time).
+    const reviewKey = view.review ? JSON.stringify(view.review) : '';
+    const reviewChanged = reviewKey !== this.reviewKey;
+    if (reviewChanged) {
+      const toggled = (this.review === null) !== (view.review === null);
+      this.reviewKey = reviewKey;
+      this.review = view.review;
+      this.hoverCand = null;
+      this.hoverCancel = false;
+      this.drawReview();
+      if (toggled && !planChanged) this.drawBack();
+    }
 
     if (planChanged) this.drawBack();
     if (newPlan && view.plan) {
-      this.sweep = animate ? 0 : 1;
+      this.sweep = animate && !this.reducedMotion ? 0 : 1;
       this.sweepStep = -1;
     }
     this.mural.mesh.visible = view.plan !== null && view.week !== null;
     if (!view.plan) this.altRows.forEach((row) => (row.mesh.visible = false)); // no plan, no runner-ups
-    if (planChanged || weekChanged) this.sweepStep = -1; // force a mural redraw
+    if (planChanged || weekChanged || reviewChanged) this.sweepStep = -1; // force a mural redraw
     this.drawMuralIfNeeded();
 
     // Desk invite card.
@@ -533,7 +654,9 @@ export class Board {
     if (cardKey !== this.cardKey) {
       this.cardKey = cardKey;
       const card = view.card;
+      const hintChanged = (card?.hint ?? '') !== (this.card?.hint ?? '');
       this.card = card;
+      if (hintChanged && !this.plan) this.drawBack(); // the empty board's "start here" line
       const show = card !== null;
       this.replanPanel.mesh.visible = show;
       this.replanButtons.forEach((b) => (b.mesh.visible = show));
@@ -554,19 +677,34 @@ export class Board {
   }
 
   /** The "who planned this / what is happening" line in the header. */
-  setAgentLine(text: string, tone: 'muted' | 'ai' | 'warn' | 'ok' = 'muted'): void {
-    const color = { muted: COLORS.muted, ai: COLORS.link, warn: COLORS.amber, ok: COLORS.green }[tone];
+  setAgentLine(text: string, tone: 'muted' | 'ai' | 'warn' | 'ok' | 'alert' = 'muted'): void {
+    // 'alert' (a conflict) is pale red: amber is kept for the decision that waits for your hold.
+    const color = { muted: COLORS.muted, ai: COLORS.link, warn: COLORS.amber, ok: COLORS.green, alert: '#ff9a90' }[tone];
     if (text === this.agentLine.text && color === this.agentLine.color) return;
     this.agentLine = { text, color };
     this.drawBack();
   }
 
+  /** The tray keeps blocked items in sight as history: "CONFLICT", "REPLACED". */
   setOutbox(items: OutboxItem[]): void {
-    this.tray.draw((c, w, h) => drawTray(c, w, h, items));
+    const views = items.map((i) => {
+      const slot = itemSlot(i);
+      const kind = kindOf(i);
+      const when = slot ? `${dayLabel(slot.day).short}, ${clock(slot.start)}` : '';
+      const short = !when ? undefined : kind === 'call' ? when : `${kind === 'focus' ? 'Focus' : kind === 'reminder' ? 'Reminder' : 'Moved'} · ${when}`;
+      return { subject: i.subject, short, blocked: blockedWord(i) || undefined };
+    });
+    this.tray.draw((c, w, h) => drawTray(c, w, h, views));
   }
 
   /** Hover feedback: brighter glow on the invite, highlighted pill or button. */
-  setHover(invite: boolean, alt: number | null, replan: number | null = null): void {
+  setHover(
+    invite: boolean,
+    alt: number | null,
+    replan: number | null = null,
+    cand: number | null = null,
+    cancel = false,
+  ): void {
     this.hoverInvite = invite;
     if (alt !== this.hoverAlt) {
       this.hoverAlt = alt;
@@ -576,13 +714,94 @@ export class Board {
       this.hoverReplan = replan;
       this.drawCardButtons(replan);
     }
+    if (cand !== this.hoverCand || cancel !== this.hoverCancel) {
+      this.hoverCand = cand;
+      this.hoverCancel = cancel;
+      this.drawReviewButtons();
+    }
   }
 
-  /** 0..1 approval progress; 0 hides the ring. */
-  setHold(progress: number): void {
+  /** The bar and its targets, shown only during a conflict review. */
+  private drawReview(): void {
+    const rv = this.review;
+    const on = rv !== null;
+    this.reviewBar.mesh.visible = on;
+    this.reviewCancel.mesh.visible = on;
+    this.candidateButtons.forEach((b, i) => (b.mesh.visible = on && i < (rv?.candidates.length ?? 0)));
+    // The chips step aside so one decision is in view; the mic stays (say a limit).
+    this.chipPanels.forEach((chip, i) => (chip.mesh.visible = !on || CHIPS[i].id === 'mic'));
+    if (!rv) return;
+    this.reviewBar.draw((c, w, h) => drawReviewBar(c, w, h, rv, LAYOUT.reviewTextPx));
+    this.drawReviewButtons();
+  }
+
+  private drawReviewButtons(): void {
+    const rv = this.review;
+    if (!rv) return;
+    this.candidateButtons.forEach((b, i) => {
+      const cand = rv.candidates[i];
+      if (!cand) return;
+      const look = rv.trial === i ? 'trial' : this.hoverCand === i ? 'hover' : 'idle';
+      b.draw((c, w, h) => drawCandidate(c, w, h, cand, look));
+    });
+    this.reviewCancel.draw((c, w, h) => drawButton(c, w, h, rv.cancel, false, this.hoverCancel, 22));
+  }
+
+  /** The compact control beside the outbox (redrawn only when it changes). */
+  setCalendarButton(view: CalendarButtonView | null, hovered: boolean): void {
+    const last = this.calendarLook;
+    if (last && last.view === view && (view === null || last.hovered === hovered)) return;
+    this.calendarLook = { view, hovered };
+    this.calendarButton.mesh.visible = view !== null;
+    if (!view) return;
+    this.calendarButton.draw((c, w, h) => {
+      roundRect(c, 2, 2, w - 4, h - 4, 18);
+      c.fillStyle = view.primary ? (hovered ? '#9cc4ff' : COLORS.link) : hovered ? 'rgba(127, 178, 255, 0.4)' : 'rgba(127, 178, 255, 0.14)';
+      c.fill();
+      c.lineWidth = 3;
+      c.strokeStyle = COLORS.link;
+      c.stroke();
+      c.textBaseline = 'middle';
+      let size = 22;
+      font(c, size, 800);
+      while (size > 13 && c.measureText(view.label).width > w - 24) font(c, --size, 800);
+      c.fillStyle = view.primary ? COLORS.ink : COLORS.text;
+      c.fillText(view.label, (w - c.measureText(view.label).width) / 2, h * 0.38);
+      size = 15;
+      font(c, size, 700);
+      while (size > 10 && c.measureText(view.sub).width > w - 20) font(c, --size, 700);
+      c.fillStyle = view.primary ? COLORS.ink : COLORS.muted;
+      c.fillText(view.sub, (w - c.measureText(view.sub).width) / 2, h * 0.72);
+      c.textBaseline = 'alphabetic';
+    });
+  }
+
+  /** 0..1 approval progress; 0 hides the ring. The label says exactly what the hold approves. */
+  setHold(progress: number, label = ''): void {
     this.ring.visible = progress > 0;
     const segs = Math.round(progress * RING_SEGMENTS);
     this.ringFill.geometry.setDrawRange(0, segs * 6);
+    if (label !== this.holdText) {
+      this.holdText = label;
+      this.holdLabel.mesh.visible = label !== '';
+      if (label) {
+        this.holdLabel.draw((c, w, h) => {
+          roundRect(c, 2, 2, w - 4, h - 4, (h - 4) / 2);
+          c.fillStyle = 'rgba(16, 20, 28, 0.94)';
+          c.fill();
+          c.lineWidth = 3;
+          c.strokeStyle = COLORS.amber;
+          c.stroke();
+          let size = 24;
+          font(c, size, 800);
+          while (size > 13 && c.measureText(label).width > w - 30) font(c, --size, 800);
+          c.fillStyle = COLORS.text;
+          c.textBaseline = 'middle';
+          c.fillText(label, (w - c.measureText(label).width) / 2, h / 2 + 1);
+          c.textBaseline = 'alphabetic';
+        });
+      }
+    }
   }
 
   /** A small "pop" of the desk card on approval. */
@@ -627,7 +846,7 @@ export class Board {
 
   /** Per-frame animation. Cheap: no allocation; canvases redraw only on sweep steps. */
   tick(dt: number, time: number): void {
-    const needs = this.plan?.invite != null && this.plan.approval === 'needs' && !this.sweeping;
+    const needs = this.plan?.invite != null && this.plan.approval === 'needs' && !this.sweeping && !this.inviteBlocked;
     this.glow.mesh.visible = needs && this.desk.visible;
     if (this.glow.mesh.visible) {
       const pulse = 0.55 + 0.35 * Math.sin(time * 3.2);
@@ -648,7 +867,8 @@ export class Board {
       }
     }
     // First 10 seconds: pulse "start here" on the first chip until there is a plan.
-    this.startGlow.mesh.visible = this.plan === null && this.object.visible;
+    // One thing asks for attention at a time: not while the agent's card or a review is up.
+    this.startGlow.mesh.visible = this.plan === null && this.object.visible && this.card === null && this.review === null;
     if (this.startGlow.mesh.visible) {
       (this.startGlow.mesh.material as MeshBasicMaterial).opacity = 0.45 + 0.45 * Math.sin(time * 4);
     }
@@ -700,15 +920,28 @@ export class Board {
     const step = this.sweep >= 1 ? steps : Math.floor(this.sweep * steps);
     if (step === this.sweepStep) return;
     this.sweepStep = step;
+    const rv = this.review;
     const view: MuralView = {
       week,
-      chosen: plan.slot,
-      alternatives: plan.alternatives,
+      // In a review the old time is drawn as a conflict, never as the agent's pick.
+      chosen: rv && rv.trial === null ? null : plan.slot,
+      alternatives: rv ? [] : plan.alternatives,
       progress: this.sweep >= 1 ? 1 : step / steps,
       reason: plan.reason,
       tag: plan.by === 'ai' ? 'AI' : plan.by === 'you' ? 'YOU' : 'RULES',
       fresh: this.fresh,
       hover: this.sweep >= 1 ? this.muralHover : null,
+      review: rv
+        ? {
+            old: rv.old,
+            candidates: rv.candidates.map((cand) => cand.slot),
+            preview: rv.preview,
+            reason: rv.reason,
+            detail: rv.detail,
+            note: rv.note,
+            noteAi: rv.noteAi,
+          }
+        : null,
     };
     this.mural.draw((c, w, h) => drawMural(c, w, h, view));
     this.placePills();
@@ -723,7 +956,7 @@ export class Board {
     this.altRows.forEach((row, i) => {
       const alt = plan?.alternatives[i];
       const di = alt && week ? week.days.indexOf(alt.day) : -1;
-      row.mesh.visible = !!alt && di >= 0 && done && this.mural.mesh.visible;
+      row.mesh.visible = !!alt && di >= 0 && done && this.mural.mesh.visible && this.review === null;
       if (!row.mesh.visible || !alt || !week) return;
       const g = muralGrid(this.mural.w, this.mural.h, week);
       const cx = g.x(di) + g.colW / 2;
@@ -794,7 +1027,16 @@ export class Board {
       font(c, 28, 500);
       c.fillStyle = COLORS.text;
       const task = plan ? `Task · ${plan.task}` : s.hint || 'Ask your agent: pinch a chip below, or 🎤 Speak';
-      drawWrapped(c, task, 44, 130, W - 88 - (LAYOUT.move.w + LAYOUT.voice.w) * PX_PER_M - 32, 34, 1);
+      const taskW = W - 88 - (LAYOUT.move.w + LAYOUT.voice.w) * PX_PER_M - 32;
+      if (this.review) {
+        // The review bar covers the rule line: the line above it says what just happened.
+        const line = this.agentLine.text || task;
+        c.fillStyle = this.agentLine.text ? this.agentLine.color : COLORS.text;
+        font(c, 26, 600);
+        drawWrapped(c, line, 44, 128, taskW, 34, 1);
+        return;
+      }
+      drawWrapped(c, task, 44, 130, taskW, 34, 1);
       font(c, 24);
       c.fillStyle = COLORS.muted;
       const rule = plan?.constraintText ? `Rule · ${plan.constraintText}` : 'Rule · none';
@@ -821,14 +1063,16 @@ export class Board {
         const mid = (top + bottom) / 2;
         font(c, 32, 600);
         c.fillStyle = COLORS.text;
-        const hint = 'Pinch “Find time + draft invite” to start';
-        c.fillText(hint, (W - c.measureText(hint).width) / 2, mid - 8);
+        // One thing to do first: the agent's card says so when it has a start of its own.
+        const hint = this.card?.hint ?? 'Pinch “Find time + draft invite” to start';
+        const what = this.card?.hint ? 'the button' : 'a chip';
+        c.fillText(hint, (W - c.measureText(hint).width) / 2, mid - 8 - (this.card?.hint ? 70 : 0));
         font(c, 26);
         c.fillStyle = COLORS.muted;
         const how = this.lookMode
-          ? 'Look at a chip, then tap your thumb and index finger together'
-          : 'Point your hand at a chip, then tap your thumb and index finger together';
-        c.fillText(how, (W - c.measureText(how).width) / 2, mid + 36);
+          ? `Look at ${what}, then tap your thumb and index finger together`
+          : `Point your hand at ${what}, then tap your thumb and index finger together`;
+        c.fillText(how, (W - c.measureText(how).width) / 2, mid + 36 - (this.card?.hint ? 70 : 0));
       }
     });
   }

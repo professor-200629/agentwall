@@ -5,8 +5,9 @@ try this on real hardware.
 
 **Link:** https://professor-200629.github.io/agentwall/
 
-Nothing is ever sent: the calendar is sample data and the "outbox" is a demo.
-The app saves its board only in your browser.
+Nothing is ever sent: the calendar is sample data, the calendar change is a
+labelled example, and the "outbox" is a demo. The app saves its board only in
+your browser ("Start over" on the page clears it).
 
 ## Before you start
 
@@ -16,7 +17,54 @@ The app saves its board only in your browser.
   front of you; that is expected.
 - Sit down, facing a wall 1–3 m away.
 
-## Steps (please note what happens at each one)
+## The 90-second flow (new on 16 Nov, never run on a headset: please try this first)
+
+An approved time stops fitting; you try another one and approve it.
+Sit down, hands in your lap. Please tell me your **headset model** and the
+**build** shown in the board's bottom-right corner.
+
+1. Open the link, press **Enter mixed reality**. One card on the wall says
+   "EXAMPLE · 30 SECONDS". Pinch **Try it**.
+2. **The wall.** On Tuesday you should see the old time crossed out with a red
+   **CONFLICT** label, and beside it a red block marked **NEW · EXAMPLE**. A red
+   bar above the week says "Tue 1:00 PM overlaps a new busy block".
+   - Can you read the bar and the two big buttons from your seat?
+   - The other chips should be gone (only 🎤 Speak stays).
+3. **The desk.** Look down: the card says **BLOCKED** in red. Pinch and hold it
+   for 2 seconds: nothing should happen.
+4. Pinch the left big button (**Wed 5:30 PM**). On the week an amber
+   **PREVIEW** appears on Wednesday; Tuesday's CONFLICT is still there. The card
+   flies to your desk and says "WAS Tue 1:00 PM → NOW Wed 5:30 PM" with one line
+   under it.
+   - Was the button easy to hit? Did you ever hit the other one by mistake?
+   - Can you read both times on the card without leaning?
+5. Pinch the other big button (**Thu 1:00 PM**), then **Cancel**. The old red
+   card should be back. Nothing was approved.
+6. Pinch a big button again. Now, on the card:
+   - **Pinch and hold for half a second, then let go.** The ring should drain and
+     the board says "Let go early · nothing was approved".
+   - **Pinch and hold, and put your hand behind your back** (so tracking is
+     lost). The board should say "Hold cancelled · hand tracking was lost".
+   - **Pinch and hold for a full second.** The ring fills (under it: "HOLD TO
+     APPROVE · …"), you hear one chime, the card says "Sending in 5 s".
+7. After 5 seconds the outbox at the bottom of the board should show the new
+   time with ✓ and the old one as **✕ REPLACED**.
+8. Leave mixed reality. On the page, under **Approved by you**: the old item is
+   struck out with no buttons; the new one has **Open email draft** and **Add to
+   my calendar**. Reload the page: it should look the same.
+9. Optional: enter again, pinch **⟳ Try a calendar change** (bottom right of the
+   board), then 🎤 **Speak** and say *"Could we push it past three o'clock?"*.
+   - Did the browser ask for the microphone? What did the red bar say after?
+   - If you say no to the microphone: do the two big buttons still work?
+10. Optional: do steps 1 to 7 once **without Space Setup** (or in a room the
+    headset does not know). The board floats and the card sits in front of you.
+    Are both times on the card still readable together?
+
+Most useful of all: **did it feel smooth or stuttery** while the card flew to
+the desk and while the preview appeared? (Quest Browser: three-dot menu ›
+"Show FPS", if you have it.) Meta asks for 60 fps and I have no number at all.
+
+## The earlier steps (please note what happens at each one)
 
 1. Open the link in **Meta Quest Browser**. Wait for the page to load
    (it may take ~10 s the first time). Press **Enter mixed reality**.
@@ -47,9 +95,9 @@ The app saves its board only in your browser.
    - Did you hear the chime?
    - Optional: while it says "Sending", pinch the card once: it should say
      "Unsent". Then pinch and hold it again to approve.
-   - After 5 s the card shows a receipt (RULES / AI / YOU). About 8 s later a
-     red "Conflict" appears and a **Re-plan?** card on the wall: pinch
-     **Re-plan** and check the invite moves to a new time.
+   - After 5 s the card shows a receipt (RULES / AI / YOU). Then pinch
+     **⟳ Try a calendar change** (bottom right of the board): the approved time
+     should turn into a red CONFLICT, as in the 90-second flow above.
 8. New in the latest build (any order, all optional):
    - After asking, the email card should **fly down from the wall to your
      table**, and you may **hear the agent** say the time (🔊 button = voice

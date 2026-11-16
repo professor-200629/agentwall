@@ -49,7 +49,11 @@ export function parseRequest(text: string, cal: CalendarData): ParsedRequest {
   }
 
   // Times.
-  const after = new RegExp(String.raw`\b(?:after|from|later than|not before)\s+${TIME}`).exec(t);
+  // "I'm busy until 3", "in meetings till 2:30": free AFTER that time. (Read as "before 3" until 16 Nov.)
+  const busyUntil = new RegExp(
+    String.raw`\b(?:busy|tied up|booked|unavailable|not free|not available|in (?:a )?(?:meeting|class|call)s?)\s+(?:until|till|til|before)\s+${TIME}`,
+  ).exec(t);
+  const after = busyUntil ?? new RegExp(String.raw`\b(?:after|from|later than|not before)\s+${TIME}`).exec(t);
   if (after) {
     const m = toMinutes(after[1], after[2], after[3]);
     if (m !== null) rule.after = m;
@@ -59,7 +63,9 @@ export function parseRequest(text: string, cal: CalendarData): ParsedRequest {
     rule.after = 16 * 60;
   }
   // (?<!not ) so "not before 4" is read only as "after 4".
-  const before = new RegExp(String.raw`(?<!not )\b(?:before|by|until|no later than|ending by)\s+${TIME}`).exec(t);
+  const before = busyUntil
+    ? null
+    : new RegExp(String.raw`(?<!not )\b(?:before|by|until|no later than|ending by)\s+${TIME}`).exec(t);
   if (before) {
     const m = toMinutes(before[1], before[2], before[3]);
     if (m !== null) rule.before = m;
@@ -79,7 +85,9 @@ export function parseRequest(text: string, cal: CalendarData): ParsedRequest {
   if (/\btomorrow\b/.test(t)) {
     const today = splitStamp(cal.now).day;
     const i = cal.days.indexOf(today);
-    if (i >= 0 && i + 1 < cal.days.length) rule.day = cal.days[i + 1];
+    // "the day after tomorrow" is two days on, not one. (Read as tomorrow until 16 Nov.)
+    const ahead = /\bday after tomorrow\b/.test(t) ? 2 : 1;
+    if (i >= 0 && i + ahead < cal.days.length) rule.day = cal.days[i + ahead];
   }
 
   const hasRule = Object.keys(rule).length > 0;

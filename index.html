@@ -57,6 +57,17 @@
       #sent-list { margin: 0; padding: 0; list-style: none; }
       #sent-list li { margin: 0 0 10px; }
       #sent-list .what { color: #e6edf3; }
+      /* History that must not be used: struck out, with the reason, and no link or button at all. */
+      #sent-list li.blocked .what { color: #8b949e; text-decoration: line-through; }
+      #sent-list li.blocked .why { color: #ffa198; font-weight: 600; margin-top: 2px; }
+      #sent-list li.blocked .outside { color: #8b949e; font-size: 12px; margin-top: 2px; }
+      #how { margin: 0 0 12px; font-size: 14px; color: #b6c2cf; }
+      #how summary { cursor: pointer; font-weight: 600; color: #e6edf3; margin-bottom: 6px; }
+      #reset-board {
+        font: inherit; font-size: 12px; padding: 5px 10px; border-radius: 8px; cursor: pointer; margin-top: 12px;
+        border: 1px solid #30363d; background: transparent; color: #8b949e;
+      }
+      #reset-board[hidden] { display: none; }
     </style>
   </head>
   <body>
@@ -64,19 +75,23 @@
     <div id="intro">
       <button id="hide-intro" type="button" aria-label="Hide this box">Hide</button>
       <h1>Agent Wall</h1>
-      <p>An AI agent plans one task on a board on your real wall. Nothing goes out until you pinch and hold to approve.</p>
-      <ol>
-        <li><b>Ask:</b> point at a chip and pinch (thumb + index finger), or pinch 🎤 Speak.</li>
-        <li><b>Change:</b> pinch “Only after 4 PM”, or an “Also free” time. The invite rewrites itself.</li>
-        <li><b>Approve:</b> pinch and hold the invite for 1 second. It goes to a demo outbox. Nothing is really sent.</li>
-        <li><b>More:</b> pinch “Focus 2 h”, or pinch one of your meetings on the week to move it.</li>
-      </ol>
+      <p>Your week on your real wall, the decision on your desk. When a time you approved stops fitting, try another one in the room and approve exactly what you see. Nothing is ever sent.</p>
+      <details id="how">
+        <summary>What to do (3 steps)</summary>
+        <ol>
+          <li><b>Try it:</b> point at “Try it” on the wall and pinch (thumb + index finger). A labelled example puts a new busy block over an approved call.</li>
+          <li><b>Choose:</b> pinch one of the two big times. It is only a preview: the old time stays on the wall, marked CONFLICT.</li>
+          <li><b>Approve:</b> pinch and hold the card on your desk for 1 second. The old invite is blocked; the new one waits here as an email draft and a calendar file.</li>
+          <li><b>Also:</b> pinch “Find time + draft invite” to plan from scratch, or 🎤 Speak a limit such as “not before lunch”.</li>
+        </ol>
+      </details>
       <button id="enter-xr" type="button">Enter mixed reality</button>
       <p id="xr-note"></p>
       <div id="sent-box" hidden>
         <h2>Approved by you</h2>
         <ul id="sent-list"></ul>
       </div>
+      <button id="reset-board" type="button" hidden>Start over (clear this board and the example)</button>
       <details id="cal-setup">
         <summary>Use my own calendar (optional)</summary>
         <p id="cal-status"></p>

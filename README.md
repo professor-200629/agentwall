@@ -1,17 +1,92 @@
 # Agent Wall
 
-A mixed reality board on your real wall where an AI agent plans one real task,
-and nothing goes out until you pinch and hold to approve.
+Your week on your real wall, the decision on your real desk. An AI agent plans a
+task; when a time you approved stops fitting, you see why, try another time in
+the room, and approve exactly what you see. Nothing goes out until you pinch and
+hold, and Agent Wall itself sends nothing.
 
 Entry for the Meta VR Start Developer Competition 2026 (Productivity track).
 Built with Meta's [Immersive Web SDK](https://iwsdk.dev) (WebXR), hands only.
 
-**Status: 15 Nov.** Real AI connected. **Tested on a real Quest 3** by steve40
-(Meta forum): after the fixes below he wrote "Cool, it's perfect now". The
-features added later the same day (flight to the desk, next steps, voice, focus
-time, palm-up summon) are tested in Meta's Quest 3 emulator, not yet on a
-headset. **Have a Quest? Please try the 10-step
-checklist: [docs/TESTING-ON-QUEST.md](docs/TESTING-ON-QUEST.md).**
+**Status: 16 Nov.** Real AI connected. **Tested on a real Quest** by steve40
+(Meta forum, builds up to `e340f98`): wall placement, Move board and recenter
+("Cool, it's perfect now"), the hold ring and its chime, and the palm-up gesture
+("Open palm worked to reposition the board. No false triggers."). He heard no
+agent voice; that was changed to recorded clips afterwards and has not been
+confirmed on a headset. **Everything added since, including the conflict review
+below, has run in Meta's emulator (IWER) only.** Frame rate on a Quest has not
+been measured. **Have a Quest? Please try
+[docs/TESTING-ON-QUEST.md](docs/TESTING-ON-QUEST.md).**
+
+## The core interaction: an approved time stops fitting
+
+You approved a call. Then your week changed. Agent Wall lets you **see why the
+approved plan became wrong, try the replacement in the room, and approve the
+exact version you looked at.** The wall holds the evidence across time; the desk
+holds the decision.
+
+1. **The change is on the wall.** A newer calendar snapshot overlaps the time you
+   approved. The old time stays where it was, crossed out and labelled
+   **CONFLICT**, beside the block that took it (marked NEW), with the real
+   reason: "Tue 1:00 PM overlaps a new busy block". When only your own calendar
+   is connected it also says **"Guest availability unknown"**. The old invite is
+   **blocked at that moment**: on the desk it reads BLOCKED, and on the start
+   page its email draft, calendar file and copy button are gone.
+2. **Try a replacement in the room.** Two large targets (about 22 x 9 cm) offer
+   other times the scheduler found: the nearest, and the same time of day on
+   another day. Pinch one and a **preview** appears at the new time while the old
+   conflict stays in view; a draft flies from that time to your desk and shows
+   both times ("WAS Tue 1:00 PM → NOW Wed 5:30 PM") and **one computed
+   trade-off** ("Last half hour of the workday", "Leaves 30 minutes before
+   Sam's next event", "Moves the call 2 hours later"). Pinching the other
+   target, or **Cancel**, changes nothing you approved.
+3. **Hold to approve the replacement.** The card starts at NEEDS APPROVAL. One
+   continuous pinch-and-hold approves the exact card shown; the ring says what
+   it approves ("HOLD TO APPROVE · Wed 5:30 PM"). Letting go early, losing hand
+   tracking, a new conflict or a new plan cancels the hold, and the pinch still
+   down cannot carry on into another card. After the 5-second Unsend window the
+   old item is **REPLACED**: it stays in the outbox and on the start page as
+   history, with nothing to hand off. The new one can be handed to your own
+   mail and calendar apps. Agent Wall sends nothing.
+
+**Try it with no setup:** enter, and pinch **Try it** on the first card (or
+**⟳ Try a calendar change** beside the outbox at any time). It is a labelled
+example: the busy block is called "Client call (example change)", the bar says
+EXAMPLE CHANGE, and when you had approved nothing yet the example's own approval
+is marked "EXAMPLE approval, not held by you". The example goes through the same
+check as a real calendar.
+
+**One check for every calendar** (`src/logic/review.ts`, `revalidate`): the
+example change, a newer `.ics` file, a re-read link, and again on the start page
+at the moment an email draft, a calendar file or the copy button is used. A
+failed re-read of a link keeps the last calendar and says "REFRESH FAILED" on
+the wall and on the start page. There is no background polling.
+
+**Say a limit:** during a review pinch 🎤 and say, for example, "Could we push it
+past three o'clock?". The sentence only becomes a limit for the search. The
+board says who understood it: **RULES** (the fixed parser) or **LIVE AI** (only
+when the parser could not read it and the model's checked answer changed the
+limit). Free times, collisions, approval and hand-off stay in code; the model
+gets free times and first names, never event titles, addresses or links. With
+no microphone, no network or an unclear sentence the two targets still work.
+
+**What Agent Wall cannot do:** an email draft already open in your mail app, or
+a calendar file you already added, is outside it. The start page says so on a
+blocked item.
+
+| The change on the wall: old time kept, the reason | Try a time: a preview, the old conflict stays |
+| --- | --- |
+| ![Conflict on the wall](docs/screenshots/review-1-conflict.png) | ![Preview on the week](docs/screenshots/review-2-preview.png) |
+| **One hold, and the ring says what it approves** | **The old item stays as history: REPLACED** |
+| ![Hold ring](docs/screenshots/review-3-hold.png) | ![Replaced](docs/screenshots/review-4-replaced.png) |
+
+Checked with real emulated hand pinches in Meta's emulator:
+`node scripts/emu/review.mjs` (46 checks: blocking, the trial, cancel, an early
+release, hand tracking lost mid-hold, a new conflict mid-hold, the fresh hold,
+the start page before and after a reload, a second change, a spoken limit,
+reduced motion, no room data) and in `tests/review.test.ts`. Not on a headset.
+
+## Everything else it does
 
 1. The app finds a wall and puts the board on it (or floats it 1.2 m in front
    of you if there is no wall).
@@ -40,10 +115,9 @@ checklist: [docs/TESTING-ON-QUEST.md](docs/TESTING-ON-QUEST.md).**
    **The agent's next step:** it then offers, one at a time, a 10-minute prep
    block before the call (green on your week) and a reminder to Sam an hour
    before. Each needs your pinch; it never adds anything on its own.
-5. **The agent keeps watch:** a few seconds later a SAMPLE change lands on the
-   approved time ("Dentist"). The mural shows it in red, the invite shows the
-   conflict, and a **Re-plan?** card appears. Re-planning moves the invite to a
-   new time, and it needs your hold again. The agent never re-sends on its own.
+5. **When the week changes:** see "The core interaction" above. (Until 16 Nov a
+   timed sample change showed a Re-plan card while the old approved invite stayed
+   usable. Now the old invite is blocked the moment the change is known.)
 6. **Same wall next time:** the board remembers which wall it was on and where.
    Next time you enter looking about the same way, it comes back to the same
    spot ("BACK ON YOUR WALL"); look clearly elsewhere and it centres on your
@@ -91,16 +165,25 @@ checklist: [docs/TESTING-ON-QUEST.md](docs/TESTING-ON-QUEST.md).**
     Agent Wall itself still sends nothing: the last click is yours, in your app.
 14. **A third task, move a meeting:** point at one of your meetings on the week
     ("Pinch to move: Design review") and pinch. The agent asks first, then finds
-    the nearest time the meeting fits on your calendar, shows it like any plan
+    the nearest time the meeting fits on your calendar (a Wednesday 3 PM meeting
+    goes to Wednesday 3:30 PM when that is free, not to the first gap of the
+    week, and the reason line says only what was searched), shows it like any plan
     and puts a **calendar change** card on your desk. Rules such as "Only after
     4 PM" narrow the move. After your hold the meeting sits at its new time and
     the next task plans around it.
 
 Items 12 to 14 were added on 16 Nov and are checked in Meta's emulator only
-(`node scripts/emu/real-calendar.mjs`, 15 checks, with a made-up `.ics` through
-the real file box; `node scripts/emu/move.mjs`, 13 checks). Not yet on a
-headset, and reading a **link** has only been tested against a fake calendar
-host, not against a real Google, Outlook or iCloud link.
+(`node scripts/emu/real-calendar.mjs`, 26 checks, with made-up `.ics` files through
+the real file box, including a newer file that takes an approved time;
+`node scripts/emu/move.mjs`, 13 checks). Not yet on a headset. Reading a
+**link**: the deployed Worker read a real public Google calendar (all-day
+holidays) on 16 Nov; a private calendar with timed meetings has not been read
+through a link yet.
+
+The calendar file of an approved item holds the **instant** you approved (UTC),
+so it is the same moment on a device in any time zone. The sample week states
+its zone (IST); your own calendar uses the wall clock of the machine that
+approved. Items saved before 16 Nov keep the wall-clock time they were saved with.
 
 Items 8 to 11 were added on 16 Nov and are checked in Meta's emulator only
 (`node scripts/emu/new-features.mjs`, 25 checks), not yet on a headset. Look
@@ -127,10 +210,12 @@ Screenshots from Meta's Quest 3 emulator (IWER), not a real headset:
 | ![Palm up](docs/screenshots/palm-bring-board.png) | ![Focus block](docs/screenshots/desk-focus-block.png) |
 
 By default all calendar data is **sample data** (`src/data/sample-calendar.json`)
-and the board says so. Your own calendar is read only if you set it up on the
-start page (item 12). Either way **Agent Wall sends nothing**: approved cards go
-to a demo outbox, and the start page hands them to your own mail and calendar
-apps (item 13).
+and the board says so, bottom left. The example change is synthetic too and
+every place it shows says so. Whether the AI or the rules understood you is a
+separate line. Your own calendar is read only if you set it up on the start page
+(item 12). Either way **Agent Wall sends nothing**: approved cards go to a demo
+outbox, and the start page hands the usable ones to your own mail and calendar
+apps (item 13). **Start over** on the start page clears the board and the example.
 
 What is kept and where, when you use your own calendar:
 
@@ -161,7 +246,7 @@ Needs Node 20.19+, 22.12+ or 24.
 ```bash
 npm install
 npm run dev          # dev server + Meta Quest 3 emulator (IWER) in a managed browser
-npm test             # unit tests (Vitest): placement, scheduler, agent checks, week, desk, receipt
+npm test             # 301 unit tests (Vitest): placement, scheduler, agent checks, week, desk, receipt, conflict review
 npm run typecheck
 npm run build        # static site in dist/
 ```
@@ -170,12 +255,19 @@ Emulator checks (dev server must be running headless):
 
 ```bash
 npx iwsdk dev up --headless --allow-browser-automation
-node scripts/emu/run.mjs            # the core flow (93 checks)
-node scripts/emu/new-features.mjs   # queue, learned rule, view fit, look + pinch
-node scripts/emu/real-calendar.mjs  # your own calendar, "Approved by you"
-node scripts/emu/move.mjs           # move a meeting
+node scripts/emu/review.mjs         # the conflict review, start to end (46 checks)
+node scripts/emu/run.mjs            # placement, asking, approving, the desk (93 checks)
+node scripts/emu/new-features.mjs   # queue, learned rule, view fit, look + pinch (19 checks)
+node scripts/emu/real-calendar.mjs  # your own calendar, a newer file, a failed re-read (26 checks)
+node scripts/emu/move.mjs           # move a meeting (13 checks)
 npx iwsdk dev down
 ```
+
+Do not edit source files while a suite runs: the dev server reloads the page.
+`node scripts/emu/review-shots.mjs` takes close-up screenshots of the review;
+`node scripts/emu/video-take.mjs` plays the demo video's sequence for a screen
+recorder (see [docs/SUBMISSION.md](docs/SUBMISSION.md)). The live model is
+checked on purpose only: `npx vitest run --config vitest.live.config.ts`.
 
 ## How the board finds a wall
 
@@ -220,6 +312,34 @@ npx iwsdk dev down
   drafted from the chosen slot; any change rewrites it and resets approval.
 - `src/ui/cards.ts`, `src/board.ts`: draw the cards on canvas textures.
 
+## When an approved time stops fitting (code)
+
+- `src/logic/review.ts`: the one check (`revalidate`) for every calendar and the
+  hand-off boundary (`checkHandOff`); which busy times collide (`overlapsOf`: a
+  real overlap, not the 10-minute gap rule; the approved event itself, back in
+  your calendar under its own title, is not a conflict); the two candidates and
+  the one trade-off line; the review state. A conflict stays until you replace
+  the item; a replaced item is superseded for good.
+- `src/logic/plan.ts` (`approve`): every approved item carries a mark of the
+  exact words and time on the card (`reviewed`), the calendar it was approved on
+  (`source`), the instant (`startUtc`), and the item it replaced (`replaces`).
+  Stored words that no longer match the mark are blocked.
+- `src/logic/example-change.ts`: snapshots A and B of the labelled example. The
+  example blocks are saved with the board, so the conflict is still on the wall
+  after a reload. Your own calendar never gets one.
+- `src/logic/storage.ts`: an approved item read back keeps only checked fields;
+  records from before 16 Nov are adopted (no kind, source or mark) and checked
+  against the calendar like any other.
+- `src/logic/hold.ts`: one continuous hold. A real release ends it (the next
+  pinch starts from nothing); `cancel()` also makes the pinch still down wait.
+- `src/logic/agent.ts` (`understandRule`): a sentence to a limit, by the rules
+  when they can read it, by the live model only when they cannot.
+- `src/sent.ts`: the start page list; blocked items have no link and no button,
+  and their calendar-file links are revoked.
+- `src/board-system.ts` (`recheck`, `beginReview`, `tryCandidate`,
+  `cancelReview`, `approveNow`): the flow. `src/board.ts`, `src/ui/cards.ts`,
+  `src/ui/mural.ts`: the bar, the two targets, the marks on the week, the card.
+
 ## The 16 Nov features
 
 - `src/logic/ics.ts`: an `.ics` text to busy blocks (uses ical.js): time zones
@@ -249,15 +369,15 @@ npx iwsdk dev down
 ## How approval works
 
 - `src/logic/hold.ts`: pinch-and-hold timer. 1 s to approve; ray flicker up to
-  0.15 s is forgiven; letting go drains the ring; after approving, the pinch
-  must be released before anything can be approved again.
+  0.15 s is forgiven; letting go ends the hold (the ring drains so you see it,
+  and the next pinch starts from nothing); after approving, the pinch must be
+  released before anything can be approved again.
 - `src/logic/plan.ts` (`approve`, `addToOutbox`, `unapprove`, `buildReceipt`):
   only an invite that needs approval and is linked to the shown slot can be
   approved. An approved invite sits in a 5 s Unsend window, then gets its
   RULES / AI / YOU receipt.
 - `src/logic/desk.ts`: picks a horizontal plane labelled table or desk at
   0.55–1.15 m high and within 1 m reach for the invite; otherwise the lap spot.
-- `src/logic/watch.ts`: the SAMPLE change the agent notices after you approve.
 - `src/board-system.ts`: IWSDK `RayInteractable` on the invite, the
   alternatives and the chips (pinch only: a finger-poke target on the desk card
   would take priority over the hand ray and block the chips). A pinch that starts

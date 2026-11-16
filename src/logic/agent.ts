@@ -226,6 +226,63 @@ export function planFromAi(
 
 export type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
 
+/** What one spoken limit was understood as, and who understood it. */
+export interface Understood {
+  constraint: Constraint;
+  /**
+   * 'rules' = the fixed parser read it. 'ai' = the parser could not, and the live
+   * model's answer passed every check and changed the limit. 'none' = nothing usable.
+   */
+  by: 'ai' | 'rules' | 'none';
+  /** Why nothing was understood, for the board. */
+  note: string;
+}
+
+const sameRule = (a: Constraint, b: Constraint) =>
+  a.after === b.after && a.before === b.before && a.day === b.day && (a.notDays ?? []).join() === (b.notDays ?? []).join();
+
+/**
+ * During a conflict review: turn one sentence ("not before lunch") into a limit
+ * for the search. The model only ever supplies the limit; which times are free,
+ * which collide, the approval and the hand-off stay in code. The request holds
+ * free times and first names, never event titles, links or email addresses
+ * (the same payload as planning, see buildPayload). Never throws.
+ */
+export async function understandRule(
+  cal: CalendarData,
+  text: string,
+  current: Constraint,
+  opts: { url: string; fetch?: FetchLike; timeoutMs?: number },
+): Promise<Understood> {
+  const parsed = parseRequest(text, cal);
+  if (parsed.intent === 'clear') return { constraint: {}, by: 'rules', note: '' };
+  if (Object.keys(parsed.rule).length > 0) return { constraint: mergeConstraint(current, parsed.rule), by: 'rules', note: '' };
+  if (parsed.intent !== 'unknown') return { constraint: current, by: 'none', note: 'no limit in that' };
+  if (!opts.url) return { constraint: current, by: 'none', note: 'AI not set up' };
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? AI_TIMEOUT_MS);
+  try {
+    const stub = makePlan(cal, current, ruleText(current));
+    const res = await (opts.fetch ?? fetch)(`${opts.url.replace(/\/$/, '')}/plan`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(buildPayload(cal, text, stub)),
+      signal: controller.signal,
+    });
+    if (!res.ok) return { constraint: current, by: 'none', note: res.status === 429 || res.status === 502 ? 'AI busy' : `AI error ${res.status}` };
+    const answer = readAiAnswer(await res.json(), cal);
+    if (!answer || answer.intent === 'unknown') return { constraint: current, by: 'none', note: 'not understood' };
+    const constraint = answer.intent === 'clear' ? {} : mergeConstraint(current, ruleFrom(answer));
+    // An answer that changes nothing did not contribute: it is not shown as the AI's work.
+    if (sameRule(constraint, current)) return { constraint: current, by: 'none', note: 'no new limit in that' };
+    return { constraint, by: 'ai', note: '' };
+  } catch (e) {
+    return { constraint: current, by: 'none', note: (e as Error)?.name === 'AbortError' ? 'AI too slow (>3 s)' : 'AI offline' };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /**
  * Ask the AI through the Worker; fall back to rules on any failure or after
  * `timeoutMs`. Never throws.

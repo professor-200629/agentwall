@@ -1,6 +1,7 @@
 {
   "about": "SAMPLE data for the demo. Not a real calendar. Times are local (IST), no time zone maths.",
   "timezone": "IST",
+  "utcOffsetMinutes": 330,
   "now": "2026-11-16T09:00",
   "workday": { "start": "09:00", "end": "18:00" },
   "meeting": { "minutes": 30, "bufferMinutes": 10, "leadMinutes": 30, "stepMinutes": 30 },

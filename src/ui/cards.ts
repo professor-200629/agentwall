@@ -128,8 +128,18 @@ export interface InviteExtras {
   sendingLeft: number | null;
   /** Receipt lines once sent. */
   receipt: ReceiptLine[] | null;
-  /** Conflict banner (the agent noticed the sample week changed). */
+  /** The time on this card is busy now: the reason. The card is blocked and cannot be approved. */
   conflict: string | null;
+  /** A replacement on trial: the old and the new time, read together on the card. */
+  change?: { was: string; now: string } | null;
+}
+
+const RED = '#e5534b';
+
+/** Text on one line, shrunk until it fits. */
+function fitText(c: CanvasRenderingContext2D, text: string, maxW: number, size: number, weight: number, min = 14): void {
+  font(c, size, weight);
+  while (size > min && c.measureText(text).width > maxW) font(c, --size, weight);
 }
 
 const TAG_COLOR: Record<ReceiptLine['tag'], string> = {
@@ -148,14 +158,28 @@ export function drawInviteCard(
 ): void {
   const approved = plan.approval === 'approved';
   const sending = approved && x.sendingLeft !== null;
-  const sent = approved && !sending && x.receipt !== null;
-  cardBody(c, w, h, x.conflict ? '#e5534b' : COLORS.link);
+  const blocked = x.conflict !== null;
+  const sent = approved && !sending && x.receipt !== null && !blocked;
+  const change = !blocked && !approved ? (x.change ?? null) : null;
+  cardBody(c, w, h, blocked ? RED : COLORS.link);
   // Focus time and a moved meeting are both changes on your own calendar, not emails.
   const focus = isFocus(plan) || !!plan.moving;
   label(
     c,
-    sent ? (focus ? 'SAVED TO DEMO CALENDAR' : 'SENT TO DEMO OUTBOX') : focus ? 'CALENDAR BLOCK' : 'INVITE DRAFT',
-    sent ? COLORS.green : COLORS.link,
+    blocked
+      ? focus
+        ? 'OLD BLOCK'
+        : 'OLD INVITE'
+      : sent
+        ? focus
+          ? 'SAVED TO DEMO CALENDAR'
+          : 'SENT TO DEMO OUTBOX'
+        : change
+          ? 'REPLACEMENT'
+          : focus
+            ? 'CALENDAR BLOCK'
+            : 'INVITE DRAFT',
+    blocked ? '#ff9a90' : sent ? COLORS.green : COLORS.link,
   );
   const inner = w - PAD * 2;
 
@@ -168,11 +192,11 @@ export function drawInviteCard(
 
   pill(
     c,
-    sent ? 'SENT · DEMO' : sending ? 'SENDING' : approved ? 'APPROVED' : 'NEEDS APPROVAL',
+    blocked ? '✕ BLOCKED' : sent ? 'SENT · DEMO' : sending ? 'SENDING' : approved ? 'APPROVED' : 'NEEDS APPROVAL',
     w - PAD,
     30,
-    approved ? COLORS.green : COLORS.amber,
-    COLORS.ink,
+    blocked ? RED : approved ? COLORS.green : COLORS.amber,
+    blocked ? '#ffffff' : COLORS.ink,
     20,
     true,
   );
@@ -202,10 +226,37 @@ export function drawInviteCard(
     c.fillText(plan.invite.to, PAD + 44, 112);
 
     font(c, 28, 700);
-    c.fillStyle = COLORS.text;
+    c.fillStyle = blocked ? COLORS.faint : COLORS.text;
     let y = drawWrapped(c, plan.invite.subject, PAD, 156, inner, 36, 2);
 
-    if (x.tradeOff && !approved) {
+    if (change) {
+      // Before and after on one line, so both are read together (also in the lap fallback).
+      const was = `WAS ${change.was}`;
+      const now = `  →  NOW ${change.now}`;
+      let size = 26;
+      const width = () => {
+        font(c, size, 600);
+        const a = c.measureText(was).width;
+        font(c, size, 800);
+        return a + c.measureText(now).width;
+      };
+      while (size > 16 && width() > inner) size--;
+      font(c, size, 600);
+      c.fillStyle = COLORS.faint;
+      c.fillText(was, PAD, y + 6);
+      const wasW = c.measureText(was).width;
+      c.fillRect(PAD, y + 6 - size * 0.32, wasW, 2); // struck out: the old time
+      font(c, size, 800);
+      c.fillStyle = COLORS.text;
+      c.fillText(now, PAD + wasW, y + 6);
+      y += 40;
+      if (x.tradeOff) {
+        // Pale, not amber: amber is kept for the decision itself (the pill, the glow, the ring).
+        font(c, 23, 600);
+        c.fillStyle = '#cfe0ff';
+        y = drawWrapped(c, `↔ ${x.tradeOff}`, PAD, y, inner, 30, 2) + 4;
+      }
+    } else if (x.tradeOff && !approved) {
       font(c, 24, 700);
       c.fillStyle = COLORS.amber;
       y = drawWrapped(c, `⚠ ${x.tradeOff}`, PAD, y + 4, inner, 30, 2) + 4;
@@ -216,8 +267,8 @@ export function drawInviteCard(
     y += 22;
 
     font(c, 26);
-    c.fillStyle = sending ? COLORS.faint : COLORS.muted;
-    const bottom = h - (approved || !x.conflict ? 80 : 120);
+    c.fillStyle = sending || blocked ? COLORS.faint : COLORS.muted;
+    const bottom = h - (blocked ? 124 : 80);
     for (const para of plan.invite.body.split('\n')) {
       if (para === '') {
         y += 12;
@@ -230,22 +281,84 @@ export function drawInviteCard(
   }
 
   // Bottom band: what to do next.
-  const bandH = 64;
-  const band = (fill: string, text: string, ink: string) => {
+  const band = (fill: string, text: string, ink: string, second = '') => {
+    const bandH = second ? 100 : 64;
     c.save();
     roundRect(c, 3, 3, w - 6, h - 6, 26);
     c.clip();
     c.fillStyle = fill;
     c.fillRect(0, h - bandH - 3, w, bandH + 3);
     c.restore();
-    font(c, 26, 800);
+    fitText(c, text, inner, 26, 800);
     c.fillStyle = ink;
-    c.fillText(text, PAD, h - 24);
+    c.fillText(text, PAD, h - (second ? 60 : 24));
+    if (second) {
+      fitText(c, second, inner, 23, 600);
+      c.fillText(second, PAD, h - 24);
+    }
   };
-  if (x.conflict) band('rgba(229, 83, 75, 0.95)', `⚠ ${x.conflict}`, '#ffffff');
+  if (x.conflict) band('rgba(229, 83, 75, 0.95)', `✕ ${x.conflict}`, '#ffffff', 'Nothing can be sent from this. Pick a time on the wall.');
   else if (sending) band('rgba(90, 209, 154, 0.95)', `Sending in ${x.sendingLeft} s · pinch to Unsend`, COLORS.ink);
   else if (sent) band('rgba(90, 209, 154, 0.25)', '✓ Nothing was really sent (demo)', COLORS.green);
-  else if (!approved) band('rgba(242, 184, 75, 0.22)', 'Pinch and hold 1 s to approve', COLORS.amber);
+  else if (!approved) {
+    band('rgba(242, 184, 75, 0.22)', change ? `Pinch and hold 1 s to approve ${change.now}` : 'Pinch and hold 1 s to approve', COLORS.amber);
+  }
+}
+
+/** One of the two big "try this time" targets on the wall during a conflict review. */
+export function drawCandidate(
+  c: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  cand: { label: string; why: string },
+  look: 'idle' | 'hover' | 'trial',
+): void {
+  roundRect(c, 3, 3, w - 6, h - 6, 18);
+  c.fillStyle = look === 'trial' ? COLORS.amber : look === 'hover' ? 'rgba(127, 178, 255, 0.42)' : 'rgba(127, 178, 255, 0.16)';
+  c.fill();
+  c.lineWidth = 4;
+  c.strokeStyle = look === 'trial' ? COLORS.amber : COLORS.link;
+  c.stroke();
+  c.textBaseline = 'middle';
+  fitText(c, cand.label, w - 28, 30, 800, 18);
+  c.fillStyle = look === 'trial' ? COLORS.ink : COLORS.text;
+  c.fillText(cand.label, (w - c.measureText(cand.label).width) / 2, h * 0.38);
+  const sub = look === 'trial' ? 'on trial · hold the card' : `try · ${cand.why}`;
+  fitText(c, sub, w - 24, 18, 600, 12);
+  c.fillStyle = look === 'trial' ? COLORS.ink : COLORS.muted;
+  c.fillText(sub, (w - c.measureText(sub).width) / 2, h * 0.72);
+  c.textBaseline = 'alphabetic';
+}
+
+/** The review bar's words: the conflict, its reason, and what the agent understood. */
+export function drawReviewBar(
+  c: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  v: { title: string; reason: string; detail: string; note: string; noteAi: boolean },
+  textW: number,
+): void {
+  roundRect(c, 2, 2, w - 4, h - 4, 18);
+  c.fillStyle = 'rgba(22, 24, 30, 0.97)';
+  c.fill();
+  c.lineWidth = 3;
+  c.strokeStyle = RED;
+  c.stroke();
+  // The visual mark: a red bar and a cross, besides the word itself.
+  c.fillStyle = RED;
+  roundRect(c, 2, 2, 12, h - 4, 6);
+  c.fill();
+  fitText(c, `✕ ${v.title}`, textW, 17, 800, 12);
+  c.fillStyle = '#ff9a90';
+  c.fillText(`✕ ${v.title}`, 26, 26);
+  // The reason stays large: it wraps onto a second line instead of shrinking.
+  font(c, 21, 800);
+  c.fillStyle = COLORS.text;
+  const y = drawWrapped(c, v.reason, 26, 51, textW, 24, 2);
+  const second = v.note || v.detail;
+  fitText(c, second, textW, 16, 600, 11);
+  c.fillStyle = v.note && v.noteAi ? COLORS.link : COLORS.muted;
+  c.fillText(second, 26, Math.min(y + 2, h - 10));
 }
 
 /** Amber halo drawn behind the invite while it needs approval. */
@@ -291,6 +404,10 @@ export const CHIP_FONT_PX = 24;
 
 export interface OutboxView {
   subject: string;
+  /** A short label, e.g. "Wed 18 Nov, 5:30 PM"; the subject is used when there is none. */
+  short?: string;
+  /** Set for history that must not be used: "CONFLICT", "REPLACED", "BLOCKED". */
+  blocked?: string;
 }
 
 export function drawTray(c: CanvasRenderingContext2D, w: number, h: number, items: OutboxView[]): void {
@@ -304,16 +421,20 @@ export function drawTray(c: CanvasRenderingContext2D, w: number, h: number, item
   font(c, 22, 700);
   c.fillStyle = COLORS.green;
   c.textBaseline = 'middle';
-  const title = `DEMO OUTBOX · ${items.length}`;
+  const title = `DEMO OUTBOX · ${items.filter((i) => !i.blocked).length}`;
   c.fillText(title, 24, h / 2);
   let x = 24 + c.measureText(title).width + 24;
 
   font(c, 22);
   const note = 'Nothing is really sent';
   const noteW = c.measureText(note).width;
-  c.fillStyle = COLORS.faint;
-  c.fillText(note, w - 24 - noteW, h / 2);
-  const maxX = w - 24 - noteW - 24;
+  // History (a blocked or replaced item) must stay in sight: it gets the note's room.
+  const history = items.some((i) => i.blocked);
+  if (!history) {
+    c.fillStyle = COLORS.faint;
+    c.fillText(note, w - 24 - noteW, h / 2);
+  }
+  const maxX = history ? w - 20 : w - 24 - noteW - 24;
 
   if (items.length === 0) {
     c.fillStyle = COLORS.muted;
@@ -322,13 +443,21 @@ export function drawTray(c: CanvasRenderingContext2D, w: number, h: number, item
     // Newest first, as chips, until the row is full.
     font(c, 22, 500);
     for (const item of items) {
-      const text = `✓ ${item.subject.replace(/^App test call: /, '')}`;
+      const what = item.short ?? item.subject.replace(/^App test call: /, '');
+      let text = item.blocked ? `✕ ${item.blocked} · ${what}` : `✓ ${what}`;
+      // History stays in sight: a chip that does not fit is cut, not dropped (down to a readable stub).
+      while (text.length > 16 && x + c.measureText(text).width + 28 > maxX) text = `${text.slice(0, -2)}…`;
       const tw = c.measureText(text).width + 28;
       if (x + tw > maxX) break;
       roundRect(c, x, h / 2 - 20, tw, 40, 20);
-      c.fillStyle = 'rgba(90, 209, 154, 0.18)';
+      c.fillStyle = item.blocked ? 'rgba(229, 83, 75, 0.16)' : 'rgba(90, 209, 154, 0.18)';
       c.fill();
-      c.fillStyle = COLORS.text;
+      if (item.blocked) {
+        c.lineWidth = 2;
+        c.strokeStyle = RED;
+        c.stroke();
+      }
+      c.fillStyle = item.blocked ? COLORS.muted : COLORS.text;
       c.fillText(text, x + 14, h / 2 + 1);
       x += tw + 10;
     }
