@@ -10,6 +10,7 @@
  * Plain TypeScript, no XR. Plans are immutable: every change returns a new one.
  */
 import { focusBlock, isFocus } from './focus.js';
+import { moveNote } from './move.js';
 import {
   clock,
   clockRange,
@@ -35,8 +36,19 @@ export interface Invite {
   source: 'rules' | 'ai';
 }
 
+/** One of your own meetings that the plan is moving (the third task). */
+export interface Moving {
+  day: string;
+  /** Minutes after midnight, where the meeting is now. */
+  start: number;
+  end: number;
+  title: string;
+}
+
 export interface Plan {
   task: string;
+  /** Set when the task is "move this meeting": the meeting, where it is now. */
+  moving?: Moving;
   constraint: Constraint;
   /** What the user said, e.g. "only after 4 PM". Empty when no rule. */
   constraintText: string;
@@ -66,14 +78,18 @@ export interface PlanOptions {
 export function draftInvite(cal: CalendarData, slot: Slot): Invite {
   const day = dayLabel(slot.day);
   const time = `${clockRange(slot.start, slot.end)} ${cal.timezone}`;
+  // The sample week is about an app test call. Your own calendar uses the topic you gave, or none.
+  const yours = cal.source === 'yours';
+  const title = yours ? (cal.topic ? `Call about ${cal.topic}` : 'Call') : 'App test call';
+  const purpose = yours ? (cal.topic ? `, to talk about ${cal.topic}` : '') : ', to go through your app test notes';
   return {
     slotId: slot.id,
-    to: `${cal.guest.name} <${cal.guest.email}>`,
-    subject: `App test call: ${slotLabel(slot, cal.timezone)}`,
+    to: cal.guest.email ? `${cal.guest.name} <${cal.guest.email}>` : cal.guest.name,
+    subject: `${title}: ${slotLabel(slot, cal.timezone)}`,
     body: [
       `Hi ${cal.guest.name},`,
       '',
-      `Could we do a ${slot.end - slot.start}-minute call on ${day.long}, ${time}, to go through your app test notes?`,
+      `Could we do a ${slot.end - slot.start}-minute call on ${day.long}, ${time}${purpose}?`,
       '',
       "I'll send the link once you confirm.",
       '',
@@ -131,7 +147,7 @@ export function chooseSlot(cal: CalendarData, plan: Plan, slot: Slot): Plan {
     slot,
     alternatives,
     reason: 'You picked this time.',
-    invite: isFocus(plan) ? focusBlock(cal, slot) : draftInvite(cal, slot),
+    invite: plan.moving ? moveNote(cal, plan.moving, slot) : isFocus(plan) ? focusBlock(cal, slot) : draftInvite(cal, slot),
     approval: 'needs',
     version: plan.version + 1,
     by: 'you',
@@ -153,6 +169,8 @@ export interface OutboxItem {
   slotId: string;
   /** ISO time the user approved it (real clock, for display). */
   approvedAt: string;
+  /** How long the event lasts, for the calendar file. */
+  minutes?: number;
   /** 'sending' during the Unsend window, then 'sent' (into the demo outbox). */
   status?: 'sending' | 'sent';
   /** What the rules, the AI and the user each did (shown on the desk card). */
@@ -192,9 +210,9 @@ export function buildReceipt(
       ? { tag: 'YOU', text: `You picked ${pick}.` }
       : plan.by === 'ai'
         ? { tag: 'AI', text: `Picked ${pick}${plan.invite?.source === 'ai' ? ' and wrote the email' : ''}.` }
-        : { tag: 'RULES', text: `Picked ${pick} and ${isFocus(plan) ? 'drafted the calendar block' : 'wrote the email'}.` };
+        : { tag: 'RULES', text: `Picked ${pick} and ${plan.moving ? 'drafted the calendar change' : isFocus(plan) ? 'drafted the calendar block' : 'wrote the email'}.` };
   return [
-    { tag: 'RULES', text: `Read the sample week (${first.short.split(' ')[0]} ${first.short.split(' ')[1]}–${last.short.split(' ')[0]} ${last.short.split(' ')[1]} ${last.short.split(' ')[2]}).` },
+    { tag: 'RULES', text: `Read ${cal.source === 'yours' ? 'your own week' : 'the sample week'} (${first.short.split(' ')[0]} ${first.short.split(' ')[1]}–${last.short.split(' ')[0]} ${last.short.split(' ')[1]} ${last.short.split(' ')[2]}).` },
     { tag: 'RULES', text: `Ruled out ${ruledOut} half hours: busy, too soon or your rule.` },
     picked,
     { tag: 'YOU', text: `Held to approve at ${approvedLabel}.` },
@@ -216,6 +234,7 @@ export function approve(plan: Plan, approvedAt: string): { plan: Plan; item: Out
     body: plan.invite.body,
     slotId: plan.invite.slotId,
     approvedAt,
+    minutes: plan.slot ? plan.slot.end - plan.slot.start : undefined,
   };
   return { plan: { ...plan, approval: 'approved', version: plan.version + 1 }, item };
 }

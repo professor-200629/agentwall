@@ -216,7 +216,8 @@ export function planFromAi(
   const plan = makePlan(cal, constraint, ruleText(constraint), current ?? undefined, {
     slot,
     reason: aiSlot && answer.reason ? answer.reason : undefined,
-    body: bodyOk ? answer.body : undefined,
+    // The AI's email is written for the sample call. On your own calendar the template (your topic) is used.
+    body: bodyOk && cal.source !== 'yours' ? answer.body : undefined,
     by: 'ai',
     note: notes.join('; '),
   });

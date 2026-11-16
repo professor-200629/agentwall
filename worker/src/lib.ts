@@ -139,6 +139,24 @@ export function parseModelJson(text: string): unknown {
   }
 }
 
+/** Calendar hosts the /ics route may fetch. Nothing else: this must never be an open proxy. */
+export const ICS_HOSTS = ['calendar.google.com', 'outlook.office365.com', 'outlook.live.com', 'icloud.com'];
+export const MAX_ICS_BYTES = 3_000_000;
+
+/** An https link on a known calendar host, with no credentials or odd port; else null. */
+export function icsUrlAllowed(raw: unknown): URL | null {
+  if (typeof raw !== 'string' || raw.length > 2000) return null;
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== 'https:' || url.username || url.password || (url.port && url.port !== '443')) return null;
+  const host = url.hostname.toLowerCase();
+  return ICS_HOSTS.some((h) => host === h || host.endsWith(`.${h}`)) ? url : null;
+}
+
 /** CORS headers when the origin is allowed, else null. */
 export function corsFor(origin: string | null, allowedList: string): Record<string, string> | null {
   const allowed = allowedList.split(',').map((s) => s.trim()).filter(Boolean);

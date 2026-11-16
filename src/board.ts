@@ -159,6 +159,8 @@ export class Board {
   private cue = new CanvasPanel(BOARD.width + 0.08, BOARD.height + 0.08, 'wall-cue');
   /** A tab under the board: "the card is on your desk", shown when the desk is out of view. */
   private deskHint = new CanvasPanel(DESK_HINT.w, DESK_HINT.h, 'desk-hint');
+  /** Which calendar this is: the sample week or your own, bottom left. */
+  private sourceLabel = { text: '', real: false };
   /** The morning queue's line beside the title, e.g. "TODAY 1 of 2 cleared". */
   private queueLine = { text: '', clear: false };
   /** True while eye gaze does the pointing (Meta VR Glasses, Quest Pro): hints say "look", not "point". */
@@ -434,6 +436,13 @@ export class Board {
 
   get deskHintVisible(): boolean {
     return this.deskHint.mesh.visible;
+  }
+
+  /** Say which calendar the wall shows, so sample data is never mistaken for real. */
+  setSourceLabel(text: string, real: boolean): void {
+    if (text === this.sourceLabel.text) return;
+    this.sourceLabel = { text, real };
+    this.drawBack();
   }
 
   /** The morning queue's progress, beside the title. */
@@ -776,6 +785,10 @@ export class Board {
       c.fillStyle = COLORS.faint;
       const build = `build ${__AGENTWALL_BUILD__}`;
       c.fillText(build, W - 44 - c.measureText(build).width, H - 12);
+      if (this.sourceLabel.text) {
+        c.fillStyle = this.sourceLabel.real ? COLORS.green : COLORS.faint;
+        c.fillText(this.sourceLabel.text, 44, H - 12);
+      }
       pill(c, s.chip, W - 44, 46, s.color, COLORS.ink, 20, true);
 
       font(c, 28, 500);

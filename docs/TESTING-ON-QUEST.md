@@ -76,6 +76,13 @@ The app saves its board only in your browser.
        rule?"** and change nothing until you pinch **Add rule**.
      - Quest Pro only (it has eye tracking): allow eye tracking when asked.
        Can you **look at a chip and pinch with your hand in your lap**?
+     - **Move a meeting:** after "Find time + draft invite", point at one of
+       the blue "You" meetings on the week. Does it say "Pinch to move: …"?
+       Pinch it, pinch **Find a time**, then hold the card on your desk.
+     - **Your own calendar (optional, only if you are comfortable):** before
+       entering, open "Use my own calendar" on the page and choose an `.ics`
+       file. Does the board say "YOUR CALENDAR" and show your week?
+       "Back to the sample week" removes it again.
 9. Pinch **🎤 Speak** and say: *"Thursday please"*. Wait ~5 s.
    - Did the browser ask for the microphone? Did it break the
      mixed reality view? What did the board show after "Heard: …"?

@@ -4,6 +4,9 @@
  *   GET  /health      -> { ok, model }
  *   POST /plan        -> Groq chat (JSON mode) -> the model's JSON answer
  *   POST /transcribe  -> multipart "audio" file -> Groq Whisper -> { text }
+ *   POST /ics         -> { url } of a private iCal link on a known calendar host -> its text
+ *                        (calendar hosts block browsers from reading them directly).
+ *                        The link and the calendar are not logged and not stored.
  *
  * Only the Agent Wall site (ALLOWED_ORIGINS) may call it from a browser.
  * The app checks every answer itself and falls back to rules, so this Worker
@@ -16,6 +19,8 @@ import {
   DEFAULT_MODEL,
   DEFAULT_ORIGINS,
   GROQ_BASE,
+  icsUrlAllowed,
+  MAX_ICS_BYTES,
   MAX_AUDIO_BYTES,
   parseModelJson,
   RateLimiter,
@@ -79,6 +84,36 @@ async function plan(req: Request, env: Env, cors: Record<string, string>): Promi
   return json(answer, 200, cors);
 }
 
+async function ics(req: Request, cors: Record<string, string>): Promise<Response> {
+  let raw: unknown;
+  try {
+    raw = await req.json();
+  } catch {
+    return json({ error: 'invalid JSON' }, 400, cors);
+  }
+  const url = icsUrlAllowed((raw as { url?: unknown } | null)?.url);
+  if (!url) return json({ error: 'only https links to Google, Outlook or iCloud calendars' }, 400, cors);
+  // Redirects are followed by hand so every hop stays on an allowed calendar host.
+  let res: Response | null = null;
+  let next: URL | null = url;
+  for (let hop = 0; hop < 4 && next; hop++) {
+    res = await fetch(next.toString(), { redirect: 'manual', headers: { accept: 'text/calendar, text/plain;q=0.8' } });
+    const to = res.status >= 300 && res.status < 400 ? res.headers.get('location') : null;
+    if (!to) break;
+    next = icsUrlAllowed(new URL(to, next).toString());
+    if (!next) return json({ error: 'the link redirects somewhere else' }, 400, cors);
+    res = null;
+  }
+  if (!res) return json({ error: 'too many redirects' }, 502, cors);
+  if (res.status === 404 || res.status === 403 || res.status === 401) return json({ error: 'calendar not found' }, 404, cors);
+  if (!res.ok) return json({ error: `calendar host ${res.status}` }, 502, cors);
+  if (Number(res.headers.get('content-length') ?? '0') > MAX_ICS_BYTES) return json({ error: 'calendar too large' }, 413, cors);
+  const text = await res.text();
+  if (text.length > MAX_ICS_BYTES) return json({ error: 'calendar too large' }, 413, cors);
+  if (!/BEGIN:VCALENDAR/i.test(text.slice(0, 2000))) return json({ error: 'not a calendar' }, 400, cors);
+  return new Response(text, { status: 200, headers: { 'content-type': 'text/calendar; charset=utf-8', 'cache-control': 'no-store', ...cors } });
+}
+
 async function transcribe(req: Request, env: Env, cors: Record<string, string>): Promise<Response> {
   const len = Number(req.headers.get('content-length') ?? '0');
   if (len > MAX_AUDIO_BYTES + 10_000) return json({ error: 'audio too large' }, 413, cors);
@@ -118,10 +153,17 @@ export default {
     if (!cors) return json({ error: 'origin not allowed' }, 403, null);
     if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors });
     if (req.method !== 'POST') return json({ error: 'not found' }, 404, cors);
-    if (!env.GROQ_API_KEY) return json({ error: 'GROQ_API_KEY not set' }, 500, cors);
     if (!limiter.allow(req.headers.get('cf-connecting-ip') ?? 'unknown')) {
       return json({ error: 'slow down' }, 429, cors);
     }
+    if (url.pathname === '/ics') {
+      try {
+        return await ics(req, cors);
+      } catch {
+        return json({ error: 'calendar host failed' }, 502, cors);
+      }
+    }
+    if (!env.GROQ_API_KEY) return json({ error: 'GROQ_API_KEY not set' }, 500, cors);
 
     try {
       if (url.pathname === '/plan') return await plan(req, env, cors);

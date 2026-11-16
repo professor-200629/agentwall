@@ -31,6 +31,32 @@
       }
       #enter-xr:disabled { background: #30363d; color: #8b949e; cursor: not-allowed; }
       #xr-note { margin: 12px 0 0; font-size: 13px; }
+      #intro { max-height: calc(100vh - 32px); overflow-y: auto; box-sizing: border-box; }
+      #cal-setup, #sent-box { margin: 14px 0 0; padding-top: 12px; border-top: 1px solid #30363d; font-size: 13px; color: #b6c2cf; }
+      #cal-setup summary { cursor: pointer; font-size: 14px; font-weight: 600; color: #e6edf3; }
+      #cal-setup label { display: block; margin: 10px 0 4px; }
+      #cal-setup input[type="text"], #cal-setup input[type="url"], #cal-setup input[type="email"] {
+        width: 100%; box-sizing: border-box; font: inherit; padding: 7px 9px; border-radius: 8px;
+        border: 1px solid #30363d; background: #0d1117; color: #e6edf3;
+      }
+      #cal-setup input[type="file"] { font: inherit; color: #b6c2cf; max-width: 100%; }
+      #cal-setup .row { display: flex; gap: 8px; }
+      #cal-setup .row > * { flex: 1; min-width: 0; }
+      #cal-setup button, #sent-box button, #sent-box a {
+        font: inherit; font-size: 13px; padding: 7px 12px; border-radius: 8px; cursor: pointer;
+        border: 1px solid #30363d; background: #161b22; color: #e6edf3; margin: 10px 8px 0 0;
+        text-decoration: none; display: inline-block;
+      }
+      #cal-status { margin: 8px 0 0; font-weight: 600; color: #e6edf3; }
+      #cal-msg { margin: 8px 0 0; min-height: 1em; }
+      #cal-msg.bad { color: #ffa198; }
+      #cal-msg.good { color: #7ee787; }
+      #cal-setup small { display: block; margin-top: 10px; line-height: 1.4; color: #8b949e; }
+      #sent-box[hidden] { display: none; }
+      #sent-box h2 { margin: 0 0 6px; font-size: 14px; color: #e6edf3; }
+      #sent-list { margin: 0; padding: 0; list-style: none; }
+      #sent-list li { margin: 0 0 10px; }
+      #sent-list .what { color: #e6edf3; }
     </style>
   </head>
   <body>
@@ -43,9 +69,41 @@
         <li><b>Ask:</b> point at a chip and pinch (thumb + index finger), or pinch 🎤 Speak.</li>
         <li><b>Change:</b> pinch “Only after 4 PM”, or an “Also free” time. The invite rewrites itself.</li>
         <li><b>Approve:</b> pinch and hold the invite for 1 second. It goes to a demo outbox. Nothing is really sent.</li>
+        <li><b>More:</b> pinch “Focus 2 h”, or pinch one of your meetings on the week to move it.</li>
       </ol>
       <button id="enter-xr" type="button">Enter mixed reality</button>
       <p id="xr-note"></p>
+      <div id="sent-box" hidden>
+        <h2>Approved by you</h2>
+        <ul id="sent-list"></ul>
+      </div>
+      <details id="cal-setup">
+        <summary>Use my own calendar (optional)</summary>
+        <p id="cal-status"></p>
+        <label for="cal-file">A calendar file (.ics) from your device</label>
+        <input id="cal-file" type="file" accept=".ics,text/calendar" />
+        <label for="cal-link">Or your private iCal link (Google, Outlook or iCloud)</label>
+        <input id="cal-link" type="url" placeholder="https://calendar.google.com/calendar/ical/…/basic.ics" autocomplete="off" />
+        <button id="cal-read" type="button">Read this link</button>
+        <label>The call (all optional)</label>
+        <div class="row">
+          <input id="cal-guest" type="text" maxlength="28" placeholder="With (name)" />
+          <input id="cal-email" type="email" maxlength="120" placeholder="Their email" />
+        </div>
+        <div class="row" style="margin-top: 8px">
+          <input id="cal-topic" type="text" maxlength="40" placeholder="About (topic)" />
+          <input id="cal-owner" type="text" maxlength="24" placeholder="Your first name" />
+        </div>
+        <button id="cal-save" type="button">Save these</button>
+        <button id="cal-sample" type="button">Back to the sample week</button>
+        <p id="cal-msg" role="status"></p>
+        <small>
+          Your calendar is read in this browser. Only busy times and short titles of the next two working weeks are
+          kept, in this browser. A link is fetched through Agent Wall's small server, because calendars do not let a
+          web page read them directly; the server keeps nothing. The AI gets free times and the guest's name, never
+          your event titles. Agent Wall never sends anything.
+        </small>
+      </details>
     </div>
     <button id="show-intro" type="button" hidden>How it works</button>
     <script type="module" src="/src/index.ts"></script>

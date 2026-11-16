@@ -67,7 +67,7 @@ export function focusReason(cal: CalendarData, windows: Slot[], best: Slot | nul
 export function focusBlock(cal: CalendarData, slot: Slot): Invite {
   return {
     slotId: slot.id,
-    to: `Your calendar (${cal.owner.name}, sample)`,
+    to: cal.source === 'yours' ? 'Your calendar' : `Your calendar (${cal.owner.name}, sample)`,
     subject: `Focus time: ${dayLabel(slot.day).short}, ${clockRange(slot.start, slot.end)} ${cal.timezone}`,
     body: [
       `Blocked for deep work: ${dayLabel(slot.day).long}, ${clockRange(slot.start, slot.end)}.`,

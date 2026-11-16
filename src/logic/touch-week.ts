@@ -8,6 +8,7 @@
  * tester found the small chips needed "extreme accuracy"). Plain TypeScript.
  */
 import { focusWindows, isFocus } from './focus.js';
+import { moveWindows } from './move.js';
 import type { Plan } from './plan.js';
 import { ruleText } from './request.js';
 import { clock, dayLabel, freeSlots, type CalendarData, type Constraint, type Slot } from './scheduler.js';
@@ -61,10 +62,16 @@ export function muralAction(
   const cell = cellAt(week, dayIndex, minute);
   if (!cell) return null;
   if (cell.kind === 'free') {
-    const pool = isFocus(plan) ? focusWindows(cal, plan.constraint) : freeSlots(cal, plan.constraint);
+    // Focus time and a moved meeting are blocks on your own calendar: a pinch inside one picks it.
+    const solo = isFocus(plan) || !!plan.moving;
+    const pool = plan.moving
+      ? moveWindows(cal, plan.moving, plan.constraint)
+      : isFocus(plan)
+        ? focusWindows(cal, plan.constraint)
+        : freeSlots(cal, plan.constraint);
     const slot =
       pool.find((s) => s.day === cell.day && s.start === cell.start) ??
-      (isFocus(plan) ? pool.find((s) => s.day === cell.day && s.start <= cell.start && s.end > cell.start) : undefined);
+      (solo ? pool.find((s) => s.day === cell.day && s.start <= cell.start && s.end > cell.start) : undefined);
     return slot ? { kind: 'pick', slot, cell } : null;
   }
   if (cell.kind === 'rule') {

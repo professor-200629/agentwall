@@ -150,7 +150,8 @@ export function drawInviteCard(
   const sending = approved && x.sendingLeft !== null;
   const sent = approved && !sending && x.receipt !== null;
   cardBody(c, w, h, x.conflict ? '#e5534b' : COLORS.link);
-  const focus = isFocus(plan);
+  // Focus time and a moved meeting are both changes on your own calendar, not emails.
+  const focus = isFocus(plan) || !!plan.moving;
   label(
     c,
     sent ? (focus ? 'SAVED TO DEMO CALENDAR' : 'SENT TO DEMO OUTBOX') : focus ? 'CALENDAR BLOCK' : 'INVITE DRAFT',

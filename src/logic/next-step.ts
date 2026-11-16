@@ -83,8 +83,8 @@ export function reminderItem(cal: CalendarData, slot: Slot, approvedAt: string):
   const when = `${dayLabel(slot.day).long}, ${clock(slot.start)} ${cal.timezone}`;
   return {
     id: `remind-${slot.id}`,
-    to: `${cal.guest.name} <${cal.guest.email}>`,
-    subject: `Reminder: app test call · ${short(slot.day)} ${clock(slot.start)}`,
+    to: cal.guest.email ? `${cal.guest.name} <${cal.guest.email}>` : cal.guest.name,
+    subject: `Reminder: ${cal.source === 'yours' ? 'our call' : 'app test call'} · ${short(slot.day)} ${clock(slot.start)}`,
     body: [`Hi ${cal.guest.name},`, '', `A quick reminder of our call on ${when}.`, '', 'Thanks,', cal.owner.name].join('\n'),
     slotId: slot.id,
     approvedAt,

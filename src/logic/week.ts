@@ -84,7 +84,14 @@ function ruleReason(c: Constraint, day: string, start: number, end: number): str
  * @param opts.focus focus time: only YOUR calendar counts, and a half hour is free
  *   only inside a 2-hour window ('short' = free, but the gap is under 2 hours)
  */
-export function weekModel(cal: CalendarData, constraint: Constraint = {}, opts: { focus?: boolean } = {}): WeekModel {
+export function weekModel(
+  cal: CalendarData,
+  constraint: Constraint = {},
+  opts: { focus?: boolean; /** Length of the block to fit, when it is not the 2-hour focus block. */ minutes?: number } = {},
+): WeekModel {
+  const blockMin = opts.minutes ?? 120;
+  const blockWord = blockMin === 120 ? '2 free hours' : `${blockMin} free minutes`;
+  const gapWord = blockMin === 120 ? '2 h' : `${blockMin} min`;
   const { minutes, bufferMinutes, leadMinutes, stepMinutes } = cal.meeting;
   const dayStart = hm(cal.workday.start);
   const dayEnd = hm(cal.workday.end);
@@ -94,7 +101,7 @@ export function weekModel(cal: CalendarData, constraint: Constraint = {}, opts: 
     ? toBlocks(cal.busy.owner, 'you')
     : [...toBlocks(cal.busy.owner, 'you'), ...toBlocks(cal.busy.guest, 'guest')];
   const free = new Set(freeSlots(cal, constraint).map((s) => s.id));
-  const windows = opts.focus ? focusWindows(cal, constraint) : [];
+  const windows = opts.focus ? focusWindows(cal, constraint, blockMin) : [];
   const label = (b: WeekBlock) => `${b.who === 'you' ? 'You' : cal.guest.name} · ${b.title}`;
 
   const cells: WeekCell[] = [];
@@ -120,13 +127,13 @@ export function weekModel(cal: CalendarData, constraint: Constraint = {}, opts: 
         const covered = windows.some((w) => w.day === day && w.start <= start && w.end >= end);
         if (covered) {
           kind = 'free';
-          reason = 'part of 2 free hours';
+          reason = `part of ${blockWord}`;
         } else if (ruleKeyFor(constraint, day, start, end)) {
           kind = 'rule';
           reason = ruleReason(constraint, day, start, end);
         } else {
           kind = 'short';
-          reason = 'gap under 2 h';
+          reason = `gap under ${gapWord}`;
         }
       } else if (!free.has(id)) {
         kind = 'rule';

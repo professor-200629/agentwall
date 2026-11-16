@@ -1,6 +1,9 @@
 import { VisibilityState, World } from '@iwsdk/core';
 import projectOptions from 'virtual:iwsdk-project';
-import { BoardSystem } from './board-system.js';
+import { refreshLinked } from './calendar-source.js';
+import { initSetup } from './setup.js';
+import { renderSent } from './sent.js';
+import { activeCalendar } from './calendar-source.js';
 import { freshUrl, needsReload, RELOAD_KEY } from './logic/version.js';
 import { unlockAudio } from './ui/sound.js';
 
@@ -29,10 +32,21 @@ void (async () => {
   }
 })();
 
-World.create(
-  document.getElementById('scene-container') as HTMLDivElement,
-  projectOptions,
-).then((world) => {
+/** The Worker URL is set at build time (GitHub Actions variable). Empty = no AI, no calendar links. */
+const WORKER_URL: string = String(import.meta.env.VITE_AGENT_URL ?? '').trim();
+initSetup(WORKER_URL);
+
+// A linked calendar is read again first (at most 4 s), so the board starts on today's truth.
+// The board is imported after that, because it picks its calendar when it loads.
+void refreshLinked(WORKER_URL)
+  .catch(() => undefined)
+  .then(() =>
+    Promise.all([
+      World.create(document.getElementById('scene-container') as HTMLDivElement, projectOptions),
+      import('./board-system.js'),
+    ]),
+  )
+  .then(([world, { BoardSystem }]) => {
   world.registerSystem(BoardSystem);
 
   // 2D start page: one button that enters mixed reality.
@@ -73,8 +87,18 @@ World.create(
     intro.hidden = false;
     showBtn.hidden = true;
   });
+  // Desktop preview: the list follows what you approve with the mouse.
+  window.addEventListener('agentwall:saved', () => {
+    const active = activeCalendar();
+    renderSent(active.cal, active.real);
+  });
   world.visibilityState.subscribe((v) => {
     const flat = v === VisibilityState.NonImmersive;
+    // Back on the page: what you approved in mixed reality, as a real email draft and calendar file.
+    if (flat) {
+      const active = activeCalendar();
+      renderSent(active.cal, active.real);
+    }
     intro.hidden = !flat || userHid;
     showBtn.hidden = !flat || !userHid;
   });

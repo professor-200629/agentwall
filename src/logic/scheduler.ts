@@ -28,6 +28,10 @@ export interface CalendarData {
   guest: Person;
   days: string[];
   busy: { owner: BusyBlock[]; guest: BusyBlock[] };
+  /** 'yours' when the week was read from the user's own calendar; absent for the sample week. */
+  source?: 'sample' | 'yours';
+  /** What the call is about, when the user said so (their own calendar only). */
+  topic?: string;
 }
 
 /** What the user asked for. All fields optional; minutes are minutes after midnight. */

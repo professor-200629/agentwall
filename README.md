@@ -77,6 +77,31 @@ checklist: [docs/TESTING-ON-QUEST.md](docs/TESTING-ON-QUEST.md).**
     switch from "point your hand" to "look". On a Quest 3 or 3S, which have no
     eye tracking, the hand ray works as before.
 
+12. **Your own calendar (optional):** on the start page, open **Use my own
+    calendar** and give an `.ics` file, or your private iCal link from Google,
+    Outlook or iCloud. The wall then shows **your** next five working days, in
+    your own time zone, with repeating meetings expanded, and the board says
+    "YOUR CALENDAR · read …" instead of "SAMPLE WEEK". You can also say who the
+    call is with, what it is about and your first name; the invite uses them.
+    **Back to the sample week** removes it from the browser again.
+13. **What you approved, for real:** after you hold a card, the start page lists
+    it under **Approved by you** with **Open email draft** (a `mailto:` link:
+    the words you approved, in your own mail app), **Add to my calendar**
+    (a real `.ics` file with the approved time and length) and **Copy text**.
+    Agent Wall itself still sends nothing: the last click is yours, in your app.
+14. **A third task, move a meeting:** point at one of your meetings on the week
+    ("Pinch to move: Design review") and pinch. The agent asks first, then finds
+    the nearest time the meeting fits on your calendar, shows it like any plan
+    and puts a **calendar change** card on your desk. Rules such as "Only after
+    4 PM" narrow the move. After your hold the meeting sits at its new time and
+    the next task plans around it.
+
+Items 12 to 14 were added on 16 Nov and are checked in Meta's emulator only
+(`node scripts/emu/real-calendar.mjs`, 15 checks, with a made-up `.ics` through
+the real file box; `node scripts/emu/move.mjs`, 13 checks). Not yet on a
+headset, and reading a **link** has only been tested against a fake calendar
+host, not against a real Google, Outlook or iCloud link.
+
 Items 8 to 11 were added on 16 Nov and are checked in Meta's emulator only
 (`node scripts/emu/new-features.mjs`, 25 checks), not yet on a headset. Look
 and pinch needs the emulator's Meta VR Glasses device (set `dev.emulator.device`
@@ -101,8 +126,25 @@ Screenshots from Meta's Quest 3 emulator (IWER), not a real headset:
 | **Palm toward your face: the board comes to you** | **Focus 2 h: a calendar block on the desk** |
 | ![Palm up](docs/screenshots/palm-bring-board.png) | ![Focus block](docs/screenshots/desk-focus-block.png) |
 
-All calendar data is **sample data** (`src/data/sample-calendar.json`). Nothing
-reads a real calendar and nothing is sent.
+By default all calendar data is **sample data** (`src/data/sample-calendar.json`)
+and the board says so. Your own calendar is read only if you set it up on the
+start page (item 12). Either way **Agent Wall sends nothing**: approved cards go
+to a demo outbox, and the start page hands them to your own mail and calendar
+apps (item 13).
+
+What is kept and where, when you use your own calendar:
+
+- In your browser only: the busy times and short titles of the next two working
+  weeks, and the link if you gave one. The calendar text itself is not kept.
+- A link is fetched through the Agent Wall Worker, because calendar hosts do not
+  let a web page read them. The Worker fetches only `https` links on Google,
+  Outlook and iCloud calendar hosts, follows no redirect off them, and keeps and
+  logs nothing.
+- The AI gets free times and the guest's name. It never gets your event titles
+  (a unit test checks this).
+- What the agent does not know: the other person's calendar (only yours is
+  read), and who else is in a meeting you move. The cards say so.
+- Not read: all-day entries, events marked free, cancelled events.
 
 ## Try it
 
@@ -128,7 +170,10 @@ Emulator checks (dev server must be running headless):
 
 ```bash
 npx iwsdk dev up --headless --allow-browser-automation
-node scripts/emu/run.mjs
+node scripts/emu/run.mjs            # the core flow (93 checks)
+node scripts/emu/new-features.mjs   # queue, learned rule, view fit, look + pinch
+node scripts/emu/real-calendar.mjs  # your own calendar, "Approved by you"
+node scripts/emu/move.mjs           # move a meeting
 npx iwsdk dev down
 ```
 
@@ -176,6 +221,18 @@ npx iwsdk dev down
 - `src/ui/cards.ts`, `src/board.ts`: draw the cards on canvas textures.
 
 ## The 16 Nov features
+
+- `src/logic/ics.ts`: an `.ics` text to busy blocks (uses ical.js): time zones
+  the file defines, repeats, moved and skipped occurrences, events across
+  midnight. `src/logic/real-week.ts`: the next five working days and the
+  calendar the agent plans on. `src/calendar-source.ts`: sample or yours, what
+  is stored, the link check. `src/setup.ts`: the start page's box.
+- `src/logic/handoff.ts`: the `mailto:` link and the `.ics` file for an approved
+  card. `src/sent.ts`: the "Approved by you" list.
+- `src/logic/move.ts`: which meeting is under a pinch, where else it fits, the
+  calendar-change card, and the calendar after the move.
+- `worker/src/index.ts` `POST /ics`: reads one calendar link (needs
+  `npx wrangler deploy` in `worker/` to go live).
 
 - `src/logic/queue.ts`: the morning queue. An item is ticked when its card
   really went out (after the Unsend window), whichever way you asked. The day

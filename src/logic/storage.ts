@@ -8,6 +8,7 @@
  */
 import { FOCUS_TASK, focusWindows } from './focus.js';
 import { isLinked, type OutboxItem, type Plan } from './plan.js';
+import { checkedMoving, moveWindows } from './move.js';
 import { freeSlots, type CalendarData, type Slot } from './scheduler.js';
 
 export const STORAGE_KEY = 'agentwall.board.v1';
@@ -50,7 +51,12 @@ export function restore(json: string | null, cal: CalendarData): SavedBoard | nu
 
   // Slots are re-read from the calendar, so a tampered time cannot sneak in.
   const isFocusPlan = isObj(data.plan) && data.plan.task === FOCUS_TASK;
-  const known = new Map((isFocusPlan ? focusWindows(cal) : freeSlots(cal)).map((s) => [s.id, s]));
+  // A "move this meeting" plan is believed only if that meeting is really on the calendar.
+  const moving = isObj(data.plan) && data.plan.moving !== undefined ? checkedMoving(cal, data.plan.moving) : null;
+  if (isObj(data.plan) && data.plan.moving !== undefined && !moving) data.plan = null;
+  const known = new Map(
+    (moving ? moveWindows(cal, moving) : isFocusPlan ? focusWindows(cal) : freeSlots(cal)).map((s) => [s.id, s]),
+  );
   let plan: Plan | null = null;
   const p = data.plan;
   if (
@@ -66,6 +72,7 @@ export function restore(json: string | null, cal: CalendarData): SavedBoard | nu
   ) {
     const candidate = {
       ...(p as unknown as Plan),
+      ...(moving ? { moving } : {}),
       slot: p.slot === null ? null : known.get((p.slot as Slot).id)!,
       alternatives: (p.alternatives as Slot[]).map((a) => known.get(a.id)!),
       by: (['ai', 'rules', 'you'] as const).includes(p.by as Plan['by']) ? (p.by as Plan['by']) : 'rules',

@@ -33,7 +33,7 @@ import {
 } from '@iwsdk/core';
 import { Board, INVITE } from './board.js';
 import { CHIPS } from './chips.js';
-import calendarJson from './data/sample-calendar.json';
+import { activeCalendar } from './calendar-source.js';
 import { runAgent, type AgentResult, type FetchLike } from './logic/agent.js';
 import { chooseDesk, type DeskPlacement } from './logic/desk.js';
 import { HOLD, HoldToApprove } from './logic/hold.js';
@@ -99,10 +99,14 @@ import {
   type QueueState,
 } from './logic/queue.js';
 import { mergeConstraint } from './logic/request.js';
+import { makeMovePlan, movableAt, withMoved, withoutBlock } from './logic/move.js';
+import type { Moving } from './logic/plan.js';
 import { BOARD } from './logic/placement.js';
 import type { Constraint, Slot } from './logic/scheduler.js';
 
-const baseCalendar = calendarJson as CalendarData;
+/** The sample week, or your own calendar when you set one up on the start page. */
+const ACTIVE = activeCalendar();
+const baseCalendar: CalendarData = ACTIVE.cal;
 /** The Worker URL is set at build time (GitHub Actions variable). Empty = rules only. */
 const AGENT_URL: string = String(import.meta.env.VITE_AGENT_URL ?? '').trim();
 const MODEL_LABEL = 'Groq';
@@ -153,11 +157,14 @@ const VOICE_KEY = 'agentwall.voice';
 /** A next-step offer nobody answers is skipped after this many seconds, so the demo moves on. */
 const NEXT_STEP_TIMEOUT = 25;
 
-type AgentCard = AgentCardView & { kind: 'replan' | NextStepKind | 'queue' | 'rule' };
+type AgentCard = AgentCardView & { kind: 'replan' | NextStepKind | 'queue' | 'rule' | 'move' };
 
 /** Used for the desk hint until the device's own view angles are known. */
 const DEFAULT_FOV = fovFromDegrees(110, 96);
 const today = () => localDay(new Date());
+
+/** The same meeting (day and time)? */
+const same = (a: Moving | undefined, b: Moving) => !!a && a.day === b.day && a.start === b.start && a.end === b.end;
 
 function greeting(hour: number): string {
   return hour < 12 ? 'GOOD MORNING' : hour < 17 ? 'GOOD AFTERNOON' : 'GOOD EVENING';
@@ -236,6 +243,8 @@ export interface AgentWallDebug {
   resetDemo: () => void;
   /** Test hook: the saved JSON, as reopening the app would read it. */
   saved: () => string | null;
+  /** Which calendar the wall shows: the sample week or your own. Never the event titles. */
+  calendar: () => { real: boolean; label: string; days: string[]; busy: number; guest: string };
   /** The morning queue: today's ticks, the days in a row, the header line. */
   queue: () => QueueState & { line: string; running: boolean };
   /** Your corrections of the agent's picks, and the rule it is offering now. */
@@ -337,7 +346,8 @@ export class BoardSystem extends createSystem({
   private clockS = 0;
   private currentItemId: string | null = null;
   private sendingUntil: number | null = null;
-  private watchEnabled = true;
+  /** The sample change ("Sam added a dentist visit") belongs to the sample week only. */
+  private watchEnabled = !ACTIVE.real;
   private watchAt: number | null = null;
   private watchFired = false;
   private conflict: string | null = null;
@@ -370,6 +380,10 @@ export class BoardSystem extends createSystem({
   /** Your corrections of the agent's picks, and the rule it may offer from them. */
   private learn: LearnState = parseLearn(readStorage(LEARN_KEY));
   private ruleOffer: RuleProposal | null = null;
+  /** The meeting you pinched, while the agent asks whether to move it. */
+  private moveOffer: Moving | null = null;
+  /** Bumped when the calendar itself changes (a meeting was moved), so the week redraws. */
+  private calVersion = 0;
   /** This device's real view angles (from its projection), or a test override. */
   private fov: Fov | null = null;
   private fovOverride: Fov | null = null;
@@ -478,6 +492,7 @@ export class BoardSystem extends createSystem({
     }
     this.board.setOutbox(this.outbox);
     this.board.setQueueLine(queueLine(this.queue), allClear(this.queue));
+    this.board.setSourceLabel(ACTIVE.label, ACTIVE.real);
     this.offerQueue();
 
     // A judge may enter through Quest Browser's own Enter button, which never clicks our
@@ -648,13 +663,22 @@ export class BoardSystem extends createSystem({
 
   private currentWeek(): WeekModel | null {
     if (!this.plan) return null;
-    const focus = isFocus(this.plan);
-    const key = JSON.stringify([this.plan.constraint, this.cal.busy.guest.length, this.prep, focus]);
+    const moving = this.plan.moving;
+    const focus = isFocus(this.plan) || !!moving;
+    const key = JSON.stringify([this.plan.constraint, this.cal.busy.guest.length, this.prep, focus, moving ?? null, this.calVersion]);
     if (key !== this.weekKey) {
       this.weekKey = key;
-      const week = weekModel(this.cal, this.plan.constraint, { focus });
+      // A meeting being moved does not block its own new time; it is drawn where it is now.
+      const week = moving
+        ? weekModel(withoutBlock(this.cal, moving), this.plan.constraint, { focus: true, minutes: moving.end - moving.start })
+        : weekModel(this.cal, this.plan.constraint, { focus });
+      const extra: WeekBlock[] = [];
+      if (moving && this.cal.busy.owner.length !== withoutBlock(this.cal, moving).busy.owner.length) {
+        extra.push({ day: moving.day, start: moving.start, end: moving.end, who: 'you', title: `${moving.title} (now)` });
+      }
       // The agent's prep block is shown, but never counts against the call it belongs to.
-      this.week = this.prep ? { ...week, blocks: [...week.blocks, this.prep] } : week;
+      if (this.prep) extra.push(this.prep);
+      this.week = extra.length ? { ...week, blocks: [...week.blocks, ...extra] } : week;
     }
     return this.week;
   }
@@ -666,9 +690,11 @@ export class BoardSystem extends createSystem({
         plan,
         text: !plan.slot
           ? null
-          : isFocus(plan)
-            ? focusTradeOff(this.cal, focusWindows(this.cal, plan.constraint), plan.slot)
-            : tradeOff(this.cal, plan.slot, plan.constraint),
+          : plan.moving
+            ? null
+            : isFocus(plan)
+              ? focusTradeOff(this.cal, focusWindows(this.cal, plan.constraint), plan.slot)
+              : tradeOff(this.cal, plan.slot, plan.constraint),
       };
     }
     const item = this.currentItemId ? this.outbox.find((o) => o.id === this.currentItemId) : undefined;
@@ -699,6 +725,19 @@ export class BoardSystem extends createSystem({
 
   /** Chips, voice, re-plan and test hooks all come through here. */
   private async ask(text: string, heard = ''): Promise<AgentResult | null> {
+    // A rule said while a meeting is being moved narrows the move; it does not start a new task.
+    const moving = this.plan?.moving;
+    if (moving && this.plan) {
+      const parsed = parseRequest(text, this.cal);
+      if (parsed.intent === 'rule' || parsed.intent === 'clear') {
+        const rule = parsed.intent === 'clear' ? {} : mergeConstraint(this.plan.constraint, parsed.rule);
+        const plan = makeMovePlan(this.cal, moving, rule, ruleText(rule), this.plan);
+        this.setPlan(plan);
+        playTick();
+        this.say(`Planned by rules${heard ? ` · ${heard}` : ''}`, 'warn');
+        return { plan, by: 'rules', note: '' };
+      }
+    }
     const id = ++this.requestId;
     this.busy = true;
     this.say(heard ? `${heard} · thinking…` : 'Thinking…', 'ai');
@@ -844,6 +883,20 @@ export class BoardSystem extends createSystem({
       playTick();
     } else {
       this.say(action.text, 'muted');
+      // Your own meeting: the agent offers to move it. Nothing moves without your hold.
+      const meeting = movableAt(this.cal, action.cell.day, action.cell.start);
+      if (meeting && !this.card && this.sendingUntil === null && !same(plan.moving, meeting)) {
+        this.moveOffer = meeting;
+        this.card = {
+          kind: 'move',
+          title: 'MOVE THIS MEETING?',
+          text: `${meeting.title}, ${shortWhen(meeting.day, meeting.start)}. I will look for another time on your calendar.`,
+          yes: 'Find a time',
+          no: 'Leave it',
+          tone: 'next',
+        };
+        this.cardShownAt = this.clockS;
+      }
     }
   }
 
@@ -854,7 +907,16 @@ export class BoardSystem extends createSystem({
     if (key === this.muralUvKey) return;
     this.muralUvKey = key;
     const action = uv ? this.muralActionAt(uv.u, uv.v) : null;
-    if (!action || action.kind === 'explain') {
+    if (action?.kind === 'explain' && movableAt(this.cal, action.cell.day, action.cell.start) && this.sendingUntil === null) {
+      const meeting = movableAt(this.cal, action.cell.day, action.cell.start);
+      this.board.setMuralHover({
+        kind: 'rule',
+        day: action.cell.day,
+        start: action.cell.start,
+        reason: action.cell.reason,
+        label: `Pinch to move: ${meeting?.title ?? 'meeting'}`,
+      });
+    } else if (!action || action.kind === 'explain') {
       this.board.setMuralHover(null);
     } else if (action.kind === 'pick') {
       const current = this.plan?.slot?.id === action.slot.id;
@@ -926,8 +988,14 @@ export class BoardSystem extends createSystem({
       this.say('In the demo outbox · nothing was really sent', 'ok');
       playTick();
       this.tickQueue(this.plan.task);
+      // A moved meeting now sits at its new time, so the next task plans around it.
+      if (this.plan.moving && this.plan.slot) {
+        this.cal = withMoved(this.cal, this.plan.moving, this.plan.slot);
+        this.calVersion++;
+        this.say('Moved on the demo calendar · nothing was really sent', 'ok');
+      }
       // The agent's next steps, one at a time, each needing your pinch.
-      this.steps = this.plan.slot && !isFocus(this.plan) ? nextSteps(this.cal, this.plan.slot) : [];
+      this.steps = this.plan.slot && !isFocus(this.plan) && !this.plan.moving ? nextSteps(this.cal, this.plan.slot) : [];
       this.nextCard(true);
     }
     // A next-step offer nobody answers is skipped, so the demo keeps moving.
@@ -992,6 +1060,19 @@ export class BoardSystem extends createSystem({
       }
       return;
     }
+    if (card.kind === 'move') {
+      this.card = null;
+      const meeting = this.moveOffer;
+      this.moveOffer = null;
+      if (yes && meeting) {
+        const plan = makeMovePlan(this.cal, meeting, {}, '', this.plan ?? undefined);
+        this.setPlan(plan);
+        this.say(plan.slot ? `Found a new time for ${meeting.title} · needs your hold` : `No other time fits ${meeting.title} this week`, plan.slot ? 'ai' : 'warn');
+      } else {
+        this.say('Okay · the meeting stays where it is', 'muted');
+      }
+      return;
+    }
     if (card.kind === 'rule') {
       this.card = null;
       const offer = this.ruleOffer;
@@ -1030,7 +1111,7 @@ export class BoardSystem extends createSystem({
   private fireWatch(): void {
     const plan = this.plan;
     if (this.watchFired || !plan?.slot || plan.approval !== 'approved') return;
-    if (isFocus(plan)) return; // the sample change is about the guest; focus time is yours alone
+    if (isFocus(plan) || plan.moving) return; // the sample change is about the guest; these are yours alone
     this.watchFired = true;
     const slot = plan.slot;
     this.cal = withGuestBusy(this.cal, sampleChange(slot));
@@ -1105,6 +1186,7 @@ export class BoardSystem extends createSystem({
 
   /** Re-plan the same task under a new rule (the meeting or the focus block). */
   private planWith(plan: Plan, rule: Constraint): Plan {
+    if (plan.moving) return makeMovePlan(this.cal, plan.moving, rule, ruleText(rule), plan);
     return isFocus(plan)
       ? makeFocusPlan(this.cal, rule, ruleText(rule), plan)
       : makePlan(this.cal, rule, ruleText(rule), plan);
@@ -1207,7 +1289,7 @@ export class BoardSystem extends createSystem({
         (chip.id === 'after4' && c.after === rule.after) ||
         (chip.id === 'thu' && c.day === rule.day) ||
         (chip.id === 'notwed' && !!c.notDays?.includes(rule.notDays?.[0] ?? '')) ||
-        (chip.id === 'task' && this.plan !== null && !isFocus(this.plan)) ||
+        (chip.id === 'task' && this.plan !== null && !isFocus(this.plan) && !this.plan.moving) ||
         (chip.id === 'focus' && isFocus(this.plan));
       const look = this.busy ? 'disabled' : hovered === i ? 'hover' : on ? 'active' : 'normal';
       this.board.setChip(i, look);
@@ -1236,6 +1318,8 @@ export class BoardSystem extends createSystem({
 
   private save(): void {
     writeStorage(serialize(this.plan, this.outbox, new Date().toISOString()));
+    // The start page lists what you approved (email draft, calendar file): tell it something changed.
+    window.dispatchEvent(new Event('agentwall:saved'));
   }
 
   // ---------- placement ----------
@@ -1528,9 +1612,12 @@ export class BoardSystem extends createSystem({
         this.board.setQueueLine(queueLine(this.queue), false);
         this.learn = emptyLearn();
         this.ruleOffer = null;
+        this.moveOffer = null;
+        this.calVersion++;
         writeStorage(null, LEARN_KEY);
       },
       saved: () => readStorage(),
+      calendar: () => ({ real: ACTIVE.real, label: ACTIVE.label, days: this.cal.days, busy: this.cal.busy.owner.length, guest: this.cal.guest.name }),
       queue: () => ({ ...this.queue, line: queueLine(this.queue), running: this.queueRunning }),
       learned: () => ({ ...this.learn, offer: this.ruleOffer?.key ?? null }),
       view: () => ({
