@@ -256,7 +256,8 @@ export function drawInviteCard(
         c.fillStyle = '#cfe0ff';
         y = drawWrapped(c, `↔ ${x.tradeOff}`, PAD, y, inner, 30, 2) + 4;
       }
-    } else if (x.tradeOff && !approved) {
+    } else if (x.tradeOff && !approved && !blocked) {
+      // Not on a blocked card: its time no longer fits, and nothing on it waits for a decision.
       font(c, 24, 700);
       c.fillStyle = COLORS.amber;
       y = drawWrapped(c, `⚠ ${x.tradeOff}`, PAD, y + 4, inner, 30, 2) + 4;
