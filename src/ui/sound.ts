@@ -5,6 +5,11 @@
  */
 let ctx: AudioContext | null = null;
 
+/** The unlocked AudioContext (null until the first click/pinch), for the agent's voice clips. */
+export function audioContext(): AudioContext | null {
+  return ctx;
+}
+
 export function unlockAudio(): void {
   try {
     ctx ??= new AudioContext();

@@ -17,8 +17,10 @@ checklist: [docs/TESTING-ON-QUEST.md](docs/TESTING-ON-QUEST.md).**
    of you if there is no wall).
 2. **Ask the agent** by pinching a chip ("Find time + draft invite", "Only after
    4 PM", "Thursday", "Not Wed", "🎯 Focus 2 h") or pinch **🎤 Speak** and say it
-   ("any time" clears your rules). The agent says its answer out loud in one short
-   sentence (🔊 turns the voice off; silent where the browser has no voice).
+   ("any time" clears your rules). The agent says what it did in one short
+   sentence: recorded clips (`public/voice/`, made by `scripts/make-voice-clips.mjs`)
+   played through Web Audio like the chimes, because Quest Browser's own speech
+   voice stays silent (found by our Quest tester). 🔊 turns the voice off.
 3. **The week mural:** the agent sweeps Mon–Fri across your wall. Every time it
    can't use is struck out with the reason (you busy, Sam busy, too close to a
    meeting, your rule). One slot lights up gold; the runner-ups are outlined,

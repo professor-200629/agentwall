@@ -65,8 +65,8 @@ import { nextSteps, prepBlock, reminderItem, type NextStep, type NextStepKind } 
 import type { WeekBlock } from './logic/week.js';
 import type { AgentCardView } from './board.js';
 import { palmNormal, PalmSummon, palmTowardFace, type P3 } from './logic/palm.js';
-import { lineFor, type SpokenMoment } from './logic/lines.js';
-import { setSpeechEnabled, speak, speechEnabled, stopSpeaking } from './ui/voice-out.js';
+import { afterSendLine, lineFor, type ClipId, type SpokenLine } from './logic/lines.js';
+import { clipState, preloadClips, setSpeechEnabled, speak, speechEnabled, stopSpeaking } from './ui/voice-out.js';
 import { playApproved, playTick, unlockAudio } from './ui/sound.js';
 import type { InviteExtras } from './ui/cards.js';
 import { VoiceInput } from './voice.js';
@@ -178,6 +178,8 @@ export interface AgentWallDebug {
   setFlySlowdown: (k: number) => void;
   /** The agent's last spoken line. */
   spoken: () => string;
+  /** Voice clips: how many loaded, which played last. */
+  voiceClips: () => { loaded: number; total: number; lastPlayed: string | null };
   setPalmHoldSeconds: (seconds: number) => void;
   /** Palm-up summon state (per hand: angle to the face, distance, pinch gap). */
   palm: () => { hands: Array<{ hand: string; angle: number; dist: number; pinch: number; facing: boolean }>; progress: number; cue: boolean; ms: number };
@@ -560,13 +562,14 @@ export class BoardSystem extends createSystem({
   }
 
   /** The agent says one short line (silent if the device has no voice, or the mic is on). */
-  private speakMoment(m: SpokenMoment): void {
-    this.speakLine(lineFor(m));
+  private speakMoment(id: ClipId): void {
+    this.speakLine(lineFor(id));
   }
 
-  private speakLine(line: string): void {
-    this.lastSpoken = line;
+  private speakLine(line: SpokenLine): void {
+    this.lastSpoken = line.text;
     if (this.voice?.state && this.voice.state !== 'idle') return;
+    preloadClips(); // once audio is allowed: fetch all clips so later lines play at once
     speak(line);
   }
 
@@ -652,11 +655,7 @@ export class BoardSystem extends createSystem({
     this.setPlan(result.plan);
     playTick();
     if (result.plan.slot) {
-      this.speakMoment(
-        isFocus(result.plan)
-          ? { kind: 'planned-focus', slot: result.plan.slot }
-          : { kind: 'planned', slot: result.plan.slot, guest: this.cal.guest.name },
-      );
+      this.speakMoment(isFocus(result.plan) ? 'planned-focus' : 'planned');
     }
     if (result.by === 'ai' && !result.note) this.say(`Planned by AI · ${MODEL_LABEL}${post}`, 'ai');
     else if (result.by === 'ai') {
@@ -707,7 +706,7 @@ export class BoardSystem extends createSystem({
         setSpeechEnabled(on);
         writeStorage(on ? null : 'off', VOICE_KEY);
         this.say(on ? 'Voice on' : 'Voice off · the board still shows every line', 'muted');
-        if (on) this.speakLine('Voice on.');
+        if (on) this.speakMoment('voice-on');
       } else if (press.kind === 'mural') {
         this.pressMural(press.u, press.v);
       } else if (press.kind === 'move' && this.world.visibilityState.value === VisibilityState.NonImmersive) {
@@ -771,7 +770,7 @@ export class BoardSystem extends createSystem({
       const next = withoutRule(plan.constraint, action.key);
       this.setPlan(makePlan(this.cal, next, ruleText(next), plan));
       this.say(`Removed your rule "${action.label}" · the agent re-planned`, 'ok');
-      this.speakMoment({ kind: 'rule-removed', rule: action.label });
+      this.speakMoment('rule-removed');
       playTick();
     } else {
       this.say(action.text, 'muted');
@@ -833,7 +832,7 @@ export class BoardSystem extends createSystem({
     this.setPlan(unapprove(this.plan));
     this.board.setOutbox(this.outbox);
     this.say('Unsent · nothing left · the invite needs your hold again', 'warn');
-    this.speakMoment({ kind: 'unsent' });
+    this.speakMoment('unsent');
     playTick();
   }
 
@@ -875,18 +874,13 @@ export class BoardSystem extends createSystem({
   /** Show the next offer, or (when none are left) start keeping watch. */
   private nextCard(afterSend = false): void {
     const step = this.steps.shift();
-    const sent = afterSend ? `${lineFor({ kind: 'sent' })} ` : '';
     if (step) {
       this.card = { ...step, tone: 'next' };
       this.cardShownAt = this.clockS;
-      const offer =
-        step.kind === 'prep'
-          ? lineFor({ kind: 'offer-prep' })
-          : lineFor({ kind: 'offer-remind', guest: this.cal.guest.name });
-      this.speakLine(sent + offer);
+      this.speakLine(afterSend ? afterSendLine(step.kind) : lineFor(step.kind === 'prep' ? 'offer-prep' : 'offer-remind'));
       return;
     }
-    if (afterSend) this.speakLine(lineFor({ kind: 'sent' }));
+    if (afterSend) this.speakLine(afterSendLine(null));
     this.card = null;
     if (this.watchEnabled && !this.watchFired && this.watchAt === null) {
       this.watchAt = this.clockS + WATCH_DELAY_SECONDS;
@@ -947,7 +941,7 @@ export class BoardSystem extends createSystem({
       tone: 'warn',
     };
     this.say('Agent noticed a conflict · re-plan?', 'warn');
-    this.speakMoment({ kind: 'conflict', guest: this.cal.guest.name });
+    this.speakMoment('conflict');
     playTick();
   }
 
@@ -961,7 +955,7 @@ export class BoardSystem extends createSystem({
       const moved = shortWhen(result.plan.slot.day, result.plan.slot.start);
       const from = before ? ` from ${shortWhen(before.day, before.start)}` : '';
       this.say(`Re-planned${from} to ${moved} · needs your hold`, 'ai');
-      this.speakMoment({ kind: 'replanned', slot: result.plan.slot });
+      this.speakMoment('replanned');
     }
   }
 
@@ -1075,10 +1069,10 @@ export class BoardSystem extends createSystem({
       );
     } else if (why === 'summon') {
       this.say('Board came to you · palm up any time to call it again', 'ok');
-      this.speakLine('Here you go.');
+      this.speakMoment('summon');
     } else if (why === 'move') {
       this.say('Board moved · it comes back here next time', 'ok');
-      this.speakMoment({ kind: 'moved' });
+      this.speakMoment('moved');
     } else if (why === 'recenter') {
       if (p.remembered) this.say('Recentered · board kept on its spot', 'ok');
     } else if (p.remembered) {
@@ -1230,6 +1224,7 @@ export class BoardSystem extends createSystem({
         this.board.flySlowdown = k;
       },
       spoken: () => this.lastSpoken,
+      voiceClips: () => clipState(),
       setPalmHoldSeconds: (seconds) => {
         this.palmSummon = new PalmSummon(seconds);
       },

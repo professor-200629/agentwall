@@ -1,14 +1,20 @@
 /**
- * The agent's voice: the browser's own speech synthesis (free, on the device,
- * no API key). Quest Browser may have no voices installed; then this stays
- * silent and the board still shows every line. The newest line always wins, and
- * nothing is said while the microphone is recording (it would hear itself).
+ * The agent's voice. Plays a short pre-recorded clip (public/voice/<id>.mp3)
+ * through Web Audio, the same path as the chimes, because Quest Browser's
+ * speechSynthesis stays silent (first real Quest test, 16 Nov). If a clip cannot
+ * load, the browser's own voice is the fallback (works on desktop Chrome).
+ * The newest line always wins, and nothing is said while the mic is recording.
  */
-let enabled = true;
+import type { ClipId, SpokenLine } from '../logic/lines.js';
+import { CLIP_IDS } from '../logic/lines.js';
+import { audioContext } from './sound.js';
 
-export function speechAvailable(): boolean {
-  return typeof window !== 'undefined' && 'speechSynthesis' in window && typeof SpeechSynthesisUtterance !== 'undefined';
-}
+let enabled = true;
+const clips = new Map<ClipId, Promise<AudioBuffer | null>>();
+const loaded = new Set<ClipId>();
+let current: AudioBufferSourceNode | null = null;
+let request = 0;
+let lastPlayed: ClipId | null = null;
 
 export function setSpeechEnabled(on: boolean): void {
   enabled = on;
@@ -19,26 +25,89 @@ export function speechEnabled(): boolean {
   return enabled;
 }
 
-/** Pick a clear English voice if the device has several. */
-function pickVoice(voices: SpeechSynthesisVoice[]): SpeechSynthesisVoice | undefined {
-  const en = voices.filter((v) => v.lang.toLowerCase().startsWith('en'));
-  return (
-    en.find((v) => /natural|neural|google|samantha|aria|jenny/i.test(v.name)) ??
-    en.find((v) => /en[-_](us|gb|in)/i.test(v.lang)) ??
-    en[0]
-  );
+function loadClip(ctx: AudioContext, id: ClipId): Promise<AudioBuffer | null> {
+  let p = clips.get(id);
+  if (!p) {
+    p = fetch(`voice/${id}.mp3`)
+      .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(String(r.status)))))
+      .then((data) => ctx.decodeAudioData(data))
+      .then((buf) => {
+        loaded.add(id);
+        return buf;
+      })
+      .catch(() => null);
+    clips.set(id, p);
+  }
+  return p;
 }
 
-/** Say one short line. Returns false when there is no voice (silent fallback). */
-export function speak(text: string): boolean {
-  if (!enabled || !speechAvailable() || !text) return false;
+/** Fetch every clip once audio is allowed, so the first line has no delay. */
+export function preloadClips(): void {
+  const ctx = audioContext();
+  if (!ctx) return;
+  for (const id of CLIP_IDS) void loadClip(ctx, id);
+}
+
+function play(ctx: AudioContext, buf: AudioBuffer, id: ClipId): void {
+  stopClip();
+  const src = ctx.createBufferSource();
+  const gain = ctx.createGain();
+  gain.gain.value = 0.9;
+  src.buffer = buf;
+  src.connect(gain).connect(ctx.destination);
+  src.onended = () => {
+    if (current === src) current = null;
+  };
+  src.start();
+  current = src;
+  lastPlayed = id;
+}
+
+/** Say one line. Returns false when there is no way to make sound yet. */
+export function speak(line: SpokenLine): boolean {
+  if (!enabled) return false;
+  const mine = ++request;
+  const ctx = audioContext();
+  if (ctx) {
+    void loadClip(ctx, line.id).then((buf) => {
+      if (mine !== request) return; // a newer line came first
+      if (buf) play(ctx, buf, line.id);
+      else speakWithBrowser(line.text);
+    });
+    return true;
+  }
+  return speakWithBrowser(line.text);
+}
+
+function stopClip(): void {
   try {
+    current?.stop();
+  } catch {
+    // already stopped
+  }
+  current = null;
+}
+
+export function stopSpeaking(): void {
+  request++;
+  stopClip();
+  try {
+    if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+  } catch {
+    // nothing to stop
+  }
+}
+
+/** Fallback: the browser's own voice (desktop Chrome has one; Quest Browser stays silent). */
+function speakWithBrowser(text: string): boolean {
+  try {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return false;
     const synth = window.speechSynthesis;
-    synth.cancel(); // the newest line wins
+    synth.cancel();
     const u = new SpeechSynthesisUtterance(text);
     u.rate = 1.05;
-    u.volume = 0.9;
-    const voice = pickVoice(synth.getVoices());
+    const en = synth.getVoices().filter((v) => v.lang.toLowerCase().startsWith('en'));
+    const voice = en.find((v) => /natural|neural|google|aria|jenny/i.test(v.name)) ?? en[0];
     if (voice) u.voice = voice;
     synth.speak(u);
     return true;
@@ -47,10 +116,7 @@ export function speak(text: string): boolean {
   }
 }
 
-export function stopSpeaking(): void {
-  try {
-    if (speechAvailable()) window.speechSynthesis.cancel();
-  } catch {
-    // nothing to stop
-  }
+/** Test hook: which clips are loaded and which one played last. */
+export function clipState(): { loaded: number; total: number; lastPlayed: ClipId | null } {
+  return { loaded: loaded.size, total: CLIP_IDS.length, lastPlayed };
 }

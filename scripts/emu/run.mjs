@@ -541,10 +541,17 @@ hook('resetDemo');
 hook('setWatch', false);
 await tap('chip:task');
 await waitIdle();
-check('when it plans, the agent says the time in words', /^Tuesday at 1:00 PM works for you and Sam\./.test(hook('spoken')), hook('spoken'));
+check('when it plans, the agent speaks', /^I found a time that works for you both\./.test(hook('spoken')), hook('spoken'));
+// Quest Browser has no speech voice (steve40, 16 Nov): the line is a recorded clip played through Web Audio.
+let vc = hook('voiceClips');
+for (let i = 0; i < 10 && vc.lastPlayed !== 'planned'; i++) {
+  await sleep(500);
+  vc = hook('voiceClips');
+}
+check('the voice is a recorded clip played through Web Audio (works where the browser has no voice)', vc.lastPlayed === 'planned' && vc.loaded >= 1, JSON.stringify(vc));
 await hook('heard', 'only after 4 PM');
 await waitIdle();
-check('a new rule, a new spoken time', /^Wednesday at 5:30 PM works for you and Sam\./.test(hook('spoken')), hook('spoken'));
+check('a new rule, the agent speaks again', /^I found a time that works for you both\./.test(hook('spoken')), hook('spoken'));
 
 // ---------- 20. Polish: start-here glow, voice toggle, the board pops in ----------
 look(0);
@@ -573,7 +580,7 @@ await tap('chip:focus');
 await waitIdle();
 plan = hook('plan');
 check('Focus 2 h: the agent finds two free hours on YOUR calendar (Thu 12:30–2:30 PM)', plan?.task === 'Block 2 hours of focus time' && plan.slot?.id === '2026-11-19T12:30' && plan.slot.end - plan.slot.start === 120 && /^Your calendar/.test(plan.invite?.to ?? ''), `${plan?.task} ${plan?.slot?.id}`);
-check('it says why, and says it out loud', /no 2-hour gap, so Thu 12:30 PM is first/.test(plan.reason) && /^Thursday at 12:30 PM is free for two hours\./.test(hook('spoken')), `${plan.reason} | ${hook('spoken')}`);
+check('it says why, and says it out loud', /no 2-hour gap, so Thu 12:30 PM is first/.test(plan.reason) && /^I found two free hours for you\./.test(hook('spoken')), `${plan.reason} | ${hook('spoken')}`);
 await tap('chip:after4');
 await waitIdle();
 plan = hook('plan');
