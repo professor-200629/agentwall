@@ -57,6 +57,34 @@ checklist: [docs/TESTING-ON-QUEST.md](docs/TESTING-ON-QUEST.md).**
    room), shows them on the week and puts a **calendar block** on your desk to
    hold-approve. Rules work the same way.
 
+8. **Your morning queue:** when you enter, the agent says how many things need
+   your OK today (the focus block, then the tester call). Pinch **Start**, hold
+   each card on your desk, and the header ends on **"TODAY ✓ all clear · 1 day
+   in a row"**. Come back tomorrow and the count goes up; miss a day and it
+   starts again. The greeting follows the time of day. About two minutes.
+9. **The agent learns, but only with your yes:** move its pick to another day
+   (or later, or earlier) **twice**, and it asks "Make *not Tuesday* a rule?".
+   Nothing changes until you pinch **Add rule**; say **No** and it does not ask
+   that again. The rule shows on the week like any other and one pinch removes it.
+10. **Fits what your device can see:** the app reads the headset's real view
+    angles. Meta VR Glasses see about 70 x 66 degrees, a Quest 3 about 110 x 96,
+    so a board that is close to you is shrunk until all of it is inside 80% of
+    the view. When a card waits on your desk and the desk is out of view, an
+    amber tab under the board says **"▼ The card is on your desk"**.
+11. **Look and pinch:** on a device with eye tracking (Meta VR Glasses, Quest
+    Pro) you look at a chip, a time or the card and pinch with your hand resting
+    in your lap. This is IWSDK's own gaze + pinch (`gazeTracking`); the hints
+    switch from "point your hand" to "look". On a Quest 3 or 3S, which have no
+    eye tracking, the hand ray works as before.
+
+Items 8 to 11 were added on 16 Nov and are checked in Meta's emulator only
+(`node scripts/emu/new-features.mjs`, 25 checks), not yet on a headset. Look
+and pinch needs the emulator's Meta VR Glasses device (set `dev.emulator.device`
+to `metaVRGlasses` in `iwsdk.config.json`); with the Quest 3 device that part is
+skipped. The emulator reports the same wide view (115 x 90 degrees) for both
+devices, so the glasses' narrow view was checked with a test setting
+(`window.agentwall.setFov(70, 66)`), not with a real pair of glasses.
+
 Screenshots from Meta's Quest 3 emulator (IWER), not a real headset:
 
 | The agent sweeps the week | The week mural, gold pick |
@@ -146,6 +174,20 @@ npx iwsdk dev down
 - `src/logic/plan.ts`: the plan is two linked cards. The invite is always
   drafted from the chosen slot; any change rewrites it and resets approval.
 - `src/ui/cards.ts`, `src/board.ts`: draw the cards on canvas textures.
+
+## The 16 Nov features
+
+- `src/logic/queue.ts`: the morning queue. An item is ticked when its card
+  really went out (after the Unsend window), whichever way you asked. The day
+  count uses your own calendar day; stored data is never trusted (a date from
+  the future starts a fresh queue).
+- `src/logic/learn.ts`: your corrections of the agent's own picks (never of your
+  own), the rule two agreeing corrections suggest, and the offers you declined.
+- `src/logic/fov.ts`: view angles from the WebXR projection matrix, the scale
+  that fits the board inside them, and whether a point is in view.
+- `iwsdk.config.json` `gazeTracking`: an optional session feature. Where the
+  browser does not offer it, nothing changes.
+- All three logic files are unit-tested in `tests/new-features.test.ts`.
 
 ## How approval works
 

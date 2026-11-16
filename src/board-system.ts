@@ -70,6 +70,37 @@ import { clipState, preloadClips, setSpeechEnabled, speak, speechEnabled, stopSp
 import { playApproved, playTick, unlockAudio } from './ui/sound.js';
 import type { InviteExtras } from './ui/cards.js';
 import { VoiceInput } from './voice.js';
+import { fitScale, fovFromDegrees, fovFromProjection, inView, type Fov } from './logic/fov.js';
+import { makeFocusPlan } from './logic/focus.js';
+import {
+  addCorrection,
+  decline,
+  emptyLearn,
+  LEARN_KEY,
+  parseLearn,
+  proposeRule,
+  serializeLearn,
+  settle,
+  type LearnState,
+  type RuleProposal,
+} from './logic/learn.js';
+import {
+  allClear,
+  emptyQueue,
+  itemForTask,
+  localDay,
+  markDone,
+  nextItem,
+  parseQueue,
+  QUEUE,
+  QUEUE_KEY,
+  queueLine,
+  serializeQueue,
+  type QueueState,
+} from './logic/queue.js';
+import { mergeConstraint } from './logic/request.js';
+import { BOARD } from './logic/placement.js';
+import type { Constraint, Slot } from './logic/scheduler.js';
 
 const baseCalendar = calendarJson as CalendarData;
 /** The Worker URL is set at build time (GitHub Actions variable). Empty = rules only. */
@@ -122,7 +153,15 @@ const VOICE_KEY = 'agentwall.voice';
 /** A next-step offer nobody answers is skipped after this many seconds, so the demo moves on. */
 const NEXT_STEP_TIMEOUT = 25;
 
-type AgentCard = AgentCardView & { kind: 'replan' | NextStepKind };
+type AgentCard = AgentCardView & { kind: 'replan' | NextStepKind | 'queue' | 'rule' };
+
+/** Used for the desk hint until the device's own view angles are known. */
+const DEFAULT_FOV = fovFromDegrees(110, 96);
+const today = () => localDay(new Date());
+
+function greeting(hour: number): string {
+  return hour < 12 ? 'GOOD MORNING' : hour < 17 ? 'GOOD AFTERNOON' : 'GOOD EVENING';
+}
 
 /** Seconds to look at the new spot after pinching "Move board". */
 export const MOVE_SECONDS = 3;
@@ -197,6 +236,16 @@ export interface AgentWallDebug {
   resetDemo: () => void;
   /** Test hook: the saved JSON, as reopening the app would read it. */
   saved: () => string | null;
+  /** The morning queue: today's ticks, the days in a row, the header line. */
+  queue: () => QueueState & { line: string; running: boolean };
+  /** Your corrections of the agent's picks, and the rule it is offering now. */
+  learned: () => LearnState & { offer: string | null };
+  /** Field of view: the device's angles, the board's scale and what placement asked for. */
+  view: () => { fovDeg: number[] | null; scale: number; asked: number | null; deskHint: boolean; gaze: boolean };
+  /** Test hook: pretend the device sees this many degrees (null = read the real device again). */
+  setFov: (hDeg: number | null, vDeg?: number) => void;
+  /** Test hook: show the queue card again (as entering the app does). */
+  offerQueue: () => boolean;
 }
 
 declare global {
@@ -312,6 +361,20 @@ export class BoardSystem extends createSystem({
   private inviteHeld = false;
   private releaseHold: () => void = () => {};
   private unsendSeconds = UNSEND_SECONDS;
+  /** The morning queue: what still needs your OK today, and the days in a row. */
+  private queue: QueueState = parseQueue(readStorage(QUEUE_KEY), today());
+  /** You pinched Start on the queue card: after each send the agent offers the next item. */
+  private queueRunning = false;
+  /** The last item just went out: say "all clear" once the follow-up offers are answered. */
+  private queueJustCleared = false;
+  /** Your corrections of the agent's picks, and the rule it may offer from them. */
+  private learn: LearnState = parseLearn(readStorage(LEARN_KEY));
+  private ruleOffer: RuleProposal | null = null;
+  /** This device's real view angles (from its projection), or a test override. */
+  private fov: Fov | null = null;
+  private fovOverride: Fov | null = null;
+  private placed: Placement | null = null;
+  private gazeOn = false;
 
   init(): void {
     this.board = new Board();
@@ -414,6 +477,8 @@ export class BoardSystem extends createSystem({
       this.say('Rules mode (AI not connected)', 'muted');
     }
     this.board.setOutbox(this.outbox);
+    this.board.setQueueLine(queueLine(this.queue), allClear(this.queue));
+    this.offerQueue();
 
     // A judge may enter through Quest Browser's own Enter button, which never clicks our
     // page, so sound would stay locked. XR select (pinch) events count as a user
@@ -454,6 +519,7 @@ export class BoardSystem extends createSystem({
     this.attachReset();
     this.voice.tick();
     this.updateInteraction(delta);
+    this.updateView();
     const palmT0 = performance.now();
     this.updatePalm(delta);
     this.palmMs = this.palmMs * 0.95 + (performance.now() - palmT0) * 0.05;
@@ -692,9 +758,11 @@ export class BoardSystem extends createSystem({
         const alt = plan?.alternatives[press.index];
         if (plan && alt && !this.busy) {
           this.animateNext = false; // your own pick: no need to replay the agent's sweep
+          this.noteCorrection(plan, alt);
           this.setPlan(chooseSlot(this.cal, plan, alt));
           this.say('You picked this time', 'muted');
           playTick();
+          this.offerRule();
         }
       } else if (press.kind === 'replan') {
         if (this.card === null || this.busy) continue;
@@ -763,12 +831,14 @@ export class BoardSystem extends createSystem({
     if (action.kind === 'pick') {
       if (plan.slot?.id === action.slot.id) return;
       this.animateNext = false; // your own pick: no need to replay the agent's sweep
+      this.noteCorrection(plan, action.slot);
       this.setPlan(chooseSlot(this.cal, plan, action.slot));
       this.say(`You picked ${shortWhen(action.slot.day, action.slot.start)}`, 'muted');
       playTick();
+      this.offerRule();
     } else if (action.kind === 'remove-rule') {
       const next = withoutRule(plan.constraint, action.key);
-      this.setPlan(makePlan(this.cal, next, ruleText(next), plan));
+      this.setPlan(this.planWith(plan, next));
       this.say(`Removed your rule "${action.label}" · the agent re-planned`, 'ok');
       this.speakMoment('rule-removed');
       playTick();
@@ -855,12 +925,13 @@ export class BoardSystem extends createSystem({
       this.save();
       this.say('In the demo outbox · nothing was really sent', 'ok');
       playTick();
+      this.tickQueue(this.plan.task);
       // The agent's next steps, one at a time, each needing your pinch.
       this.steps = this.plan.slot && !isFocus(this.plan) ? nextSteps(this.cal, this.plan.slot) : [];
       this.nextCard(true);
     }
     // A next-step offer nobody answers is skipped, so the demo keeps moving.
-    if (this.card && this.card.kind !== 'replan' && this.clockS - this.cardShownAt > NEXT_STEP_TIMEOUT) {
+    if (this.card && (this.card.kind === 'prep' || this.card.kind === 'remind') && this.clockS - this.cardShownAt > NEXT_STEP_TIMEOUT) {
       this.say('No answer · the agent skipped that suggestion', 'muted');
       this.nextCard();
     }
@@ -882,6 +953,14 @@ export class BoardSystem extends createSystem({
     }
     if (afterSend) this.speakLine(afterSendLine(null));
     this.card = null;
+    if (this.queueJustCleared) {
+      this.queueJustCleared = false;
+      this.queueRunning = false;
+      const n = this.queue.streak;
+      this.say(`All clear for today · ${n === 1 ? '1 day' : `${n} days`} in a row · see you tomorrow`, 'ok');
+    } else if (this.queueRunning && this.offerQueue(true)) {
+      return; // the next item waits for your pinch; the watch starts after the last one
+    }
     if (this.watchEnabled && !this.watchFired && this.watchAt === null) {
       this.watchAt = this.clockS + WATCH_DELAY_SECONDS;
     }
@@ -898,6 +977,34 @@ export class BoardSystem extends createSystem({
       else {
         this.card = null;
         this.say('Okay · the conflict stays flagged on the card', 'muted');
+      }
+      return;
+    }
+    if (card.kind === 'queue') {
+      this.card = null;
+      const item = nextItem(this.queue);
+      if (yes && item) {
+        this.queueRunning = true;
+        void this.ask(item.say);
+      } else {
+        this.queueRunning = false;
+        this.say('Okay · your list stays beside the title · any chip still works', 'muted');
+      }
+      return;
+    }
+    if (card.kind === 'rule') {
+      this.card = null;
+      const offer = this.ruleOffer;
+      const plan = this.plan;
+      this.ruleOffer = null;
+      if (!offer) return;
+      this.learn = settle(yes ? this.learn : decline(this.learn, offer.key));
+      writeStorage(serializeLearn(this.learn), LEARN_KEY);
+      if (yes && plan) {
+        this.setPlan(this.planWith(plan, mergeConstraint(plan.constraint, offer.rule)));
+        this.say(`Rule added: ${offer.label} · the agent re-planned · pinch the amber area to remove it`, 'ok');
+      } else {
+        this.say('Okay · no rule · the agent will not ask that again', 'muted');
       }
       return;
     }
@@ -957,6 +1064,129 @@ export class BoardSystem extends createSystem({
       this.say(`Re-planned${from} to ${moved} · needs your hold`, 'ai');
       this.speakMoment('replanned');
     }
+  }
+
+  // ---------- morning queue ----------
+
+  /** Show the queue card when something still needs your OK today. Returns whether it did. */
+  private offerQueue(next = false): boolean {
+    this.queue = parseQueue(serializeQueue(this.queue), today()); // a new day clears yesterday's ticks
+    const item = nextItem(this.queue);
+    if (!item) return false;
+    const left = QUEUE.filter((q) => !this.queue.done.includes(q.id));
+    const count = `${left.length} ${left.length === 1 ? 'THING NEEDS' : 'THINGS NEED'} YOUR OK`;
+    this.card = {
+      kind: 'queue',
+      title: next ? `${this.queue.done.length} OF ${QUEUE.length} CLEARED · NEXT` : `${greeting(new Date().getHours())} · ${count} TODAY`,
+      text:
+        left.length > 1
+          ? `First: ${left[0].label}. Then: ${left[1].label}. Each one needs your hold.`
+          : `${item.label}. It needs your hold.`,
+      yes: next ? 'Next' : 'Start',
+      no: next ? 'Stop here' : 'Later',
+      tone: 'next',
+    };
+    this.cardShownAt = this.clockS;
+    return true;
+  }
+
+  /** A card really went out: tick its queue item; the last tick counts the day. */
+  private tickQueue(task: string): void {
+    const id = itemForTask(task);
+    if (!id) return;
+    const result = markDone(this.queue, id, today());
+    this.queue = result.state;
+    if (result.completed) this.queueJustCleared = true;
+    writeStorage(serializeQueue(this.queue), QUEUE_KEY);
+    this.board.setQueueLine(queueLine(this.queue), allClear(this.queue));
+  }
+
+  // ---------- learning from corrections ----------
+
+  /** Re-plan the same task under a new rule (the meeting or the focus block). */
+  private planWith(plan: Plan, rule: Constraint): Plan {
+    return isFocus(plan)
+      ? makeFocusPlan(this.cal, rule, ruleText(rule), plan)
+      : makePlan(this.cal, rule, ruleText(rule), plan);
+  }
+
+  /** You moved the agent's own pick: remember from where to where. */
+  private noteCorrection(plan: Plan, to: Slot): void {
+    if (!plan.slot || plan.by === 'you' || plan.slot.id === to.id) return;
+    this.learn = addCorrection(this.learn, plan.slot, to);
+    writeStorage(serializeLearn(this.learn), LEARN_KEY);
+  }
+
+  /** Two corrections agree: the agent offers a rule. It never adds one by itself. */
+  private offerRule(): void {
+    if (this.card || !this.plan) return;
+    const offer = proposeRule(this.learn, this.plan.constraint);
+    if (!offer) return;
+    this.ruleOffer = offer;
+    this.card = {
+      kind: 'rule',
+      title: 'AGENT NOTICED A PATTERN',
+      text: `${offer.noticed} Make "${offer.label}" a rule?`,
+      yes: 'Add rule',
+      no: 'No',
+      tone: 'next',
+    };
+    this.cardShownAt = this.clockS;
+    this.say('The agent has a suggestion · it needs your pinch', 'ai');
+  }
+
+  // ---------- field of view, eye gaze ----------
+
+  /**
+   * Every frame in mixed reality: learn this device's view angles, keep the board
+   * inside them, point to the desk card when it is out of view, and switch the
+   * hints to "look at" when eye gaze does the pointing.
+   */
+  private updateView(): void {
+    if (this.world.visibilityState.value === VisibilityState.NonImmersive) {
+      this.board.setDeskHint(false);
+      return;
+    }
+    if (!this.fovOverride) {
+      const eye = this.xrManager.isPresenting ? this.xrManager.getCamera().cameras[0] : undefined;
+      const m = eye?.projectionMatrix.elements;
+      const fov = m ? fovFromProjection(m[0], m[5]) : null;
+      if (fov && (!this.fov || Math.abs(fov.h - this.fov.h) > 0.01 || Math.abs(fov.v - this.fov.v) > 0.01)) {
+        this.fov = fov;
+        this.refit();
+      }
+    }
+    const gaze = this.input.xr.gazeEnabled && this.input.xr.gazePointer.canTarget();
+    if (gaze !== this.gazeOn) {
+      this.gazeOn = gaze;
+      this.board.setLookMode(gaze);
+    }
+    const plan = this.plan;
+    const waiting = plan?.invite != null && plan.approval === 'needs' && this.board.desk.visible && !this.board.sweeping;
+    let hint = false;
+    if (waiting && this.board.object.visible) {
+      const head = this.player.head;
+      head.getWorldPosition(this.headPos);
+      head.getWorldQuaternion(this.headQuat);
+      this.headFwd.set(0, 0, -1).applyQuaternion(this.headQuat);
+      hint = !inView(this.headPos, this.headFwd, this.board.desk.position, this.fov ?? DEFAULT_FOV);
+    }
+    this.board.setDeskHint(hint);
+  }
+
+  /** The board's size for a placement: what placement asked for, shrunk to fit the view. */
+  private fittedScale(p: Placement): number {
+    if (!this.fov || this.headPos.lengthSq() < 1e-6) return p.scale;
+    const d = Math.hypot(p.position.x - this.headPos.x, p.position.y - this.headPos.y, p.position.z - this.headPos.z);
+    return fitScale(BOARD, d, this.fov, p.scale);
+  }
+
+  /** The view angles changed (first reading, or a test override): resize the board where it is. */
+  private refit(): void {
+    if (!this.placed || !this.board.object.visible) return;
+    if (this.world.visibilityState.value === VisibilityState.NonImmersive) return;
+    this.player.head.getWorldPosition(this.headPos);
+    this.board.setScale(this.fittedScale(this.placed));
   }
 
   private drawChips(): void {
@@ -1051,10 +1281,14 @@ export class BoardSystem extends createSystem({
     const o = this.board.object;
     o.position.set(p.position.x, p.position.y, p.position.z);
     o.rotation.set(0, p.yaw, 0);
-    o.scale.setScalar(p.scale);
+    this.placed = p;
+    const flat = this.world.visibilityState.value === VisibilityState.NonImmersive;
+    // Field-of-view fit: a board close to you is shrunk until this device can see all of it.
+    const scale = flat ? p.scale : this.fittedScale(p);
+    o.scale.setScalar(scale);
     o.visible = true;
     this.board.setStatus(p.remembered ? 'same-wall' : p.kind);
-    if (this.world.visibilityState.value !== VisibilityState.NonImmersive) this.board.appear(p.scale);
+    if (!flat) this.board.appear(scale);
     if (p.kind === 'wall') this.rememberWall(p);
     const why = this.placingFor;
     this.placingFor = null;
@@ -1287,8 +1521,31 @@ export class BoardSystem extends createSystem({
         writeStorage(null);
         this.wallMemory = null;
         writeStorage(null, SAME_WALL.storageKey);
+        this.queue = emptyQueue(today());
+        this.queueRunning = false;
+        this.queueJustCleared = false;
+        writeStorage(null, QUEUE_KEY);
+        this.board.setQueueLine(queueLine(this.queue), false);
+        this.learn = emptyLearn();
+        this.ruleOffer = null;
+        writeStorage(null, LEARN_KEY);
       },
       saved: () => readStorage(),
+      queue: () => ({ ...this.queue, line: queueLine(this.queue), running: this.queueRunning }),
+      learned: () => ({ ...this.learn, offer: this.ruleOffer?.key ?? null }),
+      view: () => ({
+        fovDeg: this.fov ? [Math.round((this.fov.h * 180) / Math.PI), Math.round((this.fov.v * 180) / Math.PI)] : null,
+        scale: this.board.object.scale.x,
+        asked: this.placed?.scale ?? null,
+        deskHint: this.board.deskHintVisible,
+        gaze: this.gazeOn,
+      }),
+      setFov: (hDeg, vDeg) => {
+        this.fovOverride = hDeg === null ? null : fovFromDegrees(hDeg, vDeg ?? hDeg);
+        this.fov = this.fovOverride;
+        this.refit();
+      },
+      offerQueue: () => this.offerQueue(),
     };
   }
 }

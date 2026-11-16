@@ -60,6 +60,22 @@ The app saves its board only in your browser.
    - Hold an **open palm toward your face** for a second (no pinch): a ring
      fills and the board comes to where you look. Did it ever trigger when you
      did not want it?
+   - **New 16 Nov (not yet tried on a headset):**
+     - When you enter, a card on the wall says **"… THINGS NEED YOUR OK
+       TODAY"**. Pinch **Start**, hold the card on your desk, pinch **Next**,
+       hold again, answer the two small offers. The header should end on
+       **"TODAY ✓ all clear · 1 day in a row"**. Did it take under 3 minutes?
+     - While a card waits on your desk and you look at the wall, an amber tab
+       under the board says **"▼ The card is on your desk"**. Does it go away
+       when you look down at the card?
+     - Sit about **70 cm from the wall** and pinch **⤢ Move board**: the board
+       should come back smaller, so you can see all of it without turning
+       your head. Is the text still readable?
+     - Pinch "Find time + draft invite", then pinch a free time on **another
+       day**. Do that **twice**. The agent should ask **"Make 'not Tuesday' a
+       rule?"** and change nothing until you pinch **Add rule**.
+     - Quest Pro only (it has eye tracking): allow eye tracking when asked.
+       Can you **look at a chip and pinch with your hand in your lap**?
 9. Pinch **🎤 Speak** and say: *"Thursday please"*. Wait ~5 s.
    - Did the browser ask for the microphone? Did it break the
      mixed reality view? What did the board show after "Heard: …"?

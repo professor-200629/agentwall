@@ -99,6 +99,7 @@ export const INVITE = { w: 0.62, h: 0.52, deskScale: 0.55 };
 /** Layers in front of the board, in metres, so nothing z-fights. */
 const Z = { mural: 0.004, pill: 0.008, replan: 0.012, button: 0.016, cue: 0.02 };
 const GLOW_PAD = 0.03;
+const DESK_HINT = { w: 0.56, h: 0.05 };
 const RING_SEGMENTS = 64;
 /** Seconds the agent's sweep across the week takes. */
 export const SWEEP_SECONDS = 1.8;
@@ -156,6 +157,12 @@ export class Board {
     new CanvasPanel(LAYOUT.replanNo.w, LAYOUT.replanNo.h, 'replan-no'),
   ];
   private cue = new CanvasPanel(BOARD.width + 0.08, BOARD.height + 0.08, 'wall-cue');
+  /** A tab under the board: "the card is on your desk", shown when the desk is out of view. */
+  private deskHint = new CanvasPanel(DESK_HINT.w, DESK_HINT.h, 'desk-hint');
+  /** The morning queue's line beside the title, e.g. "TODAY 1 of 2 cleared". */
+  private queueLine = { text: '', clear: false };
+  /** True while eye gaze does the pointing (Meta VR Glasses, Quest Pro): hints say "look", not "point". */
+  private lookMode = false;
   readonly inviteCard = new CanvasPanel(INVITE.w, INVITE.h, 'invite-card');
   private glow = new CanvasPanel(INVITE.w + GLOW_PAD * 2, INVITE.h + GLOW_PAD * 2, 'invite-glow');
   private ring = new Group();
@@ -213,6 +220,24 @@ export class Board {
       c.stroke();
     });
     this.add(this.object, this.cue.mesh, 0, 0, Z.cue, 7);
+    this.add(this.object, this.deskHint.mesh, 0, -BOARD.height / 2 - DESK_HINT.h / 2 - 0.012, Z.pill, 4);
+    this.deskHint.mesh.visible = false;
+    this.deskHint.draw((c, w, h) => {
+      roundRect(c, 2, 2, w - 4, h - 4, (h - 4) / 2);
+      c.fillStyle = 'rgba(46, 34, 10, 0.95)';
+      c.fill();
+      c.lineWidth = 3;
+      c.strokeStyle = COLORS.amber;
+      c.stroke();
+      const t = '▼  The card is on your desk · pinch and hold it';
+      let size = 24;
+      font(c, size, 700);
+      while (size > 12 && c.measureText(t).width > w - 36) font(c, --size, 700);
+      c.fillStyle = COLORS.text;
+      c.textBaseline = 'middle';
+      c.fillText(t, (w - c.measureText(t).width) / 2, h / 2 + 1);
+      c.textBaseline = 'alphabetic';
+    });
     CHIPS.forEach((_c, i) => this.setChip(i, 'normal'));
     this.setMove('⤢ Move board', false);
 
@@ -400,6 +425,35 @@ export class Board {
     mesh.position.set(x, y, z);
     mesh.renderOrder = order;
     parent.add(mesh);
+  }
+
+  /** The tab under the board that points down to the desk card. */
+  setDeskHint(visible: boolean): void {
+    this.deskHint.mesh.visible = visible;
+  }
+
+  get deskHintVisible(): boolean {
+    return this.deskHint.mesh.visible;
+  }
+
+  /** The morning queue's progress, beside the title. */
+  setQueueLine(text: string, clear: boolean): void {
+    if (text === this.queueLine.text && clear === this.queueLine.clear) return;
+    this.queueLine = { text, clear };
+    this.drawBack();
+  }
+
+  /** Eyes do the pointing: the hints say "look at" instead of "point your hand at". */
+  setLookMode(on: boolean): void {
+    if (on === this.lookMode) return;
+    this.lookMode = on;
+    this.drawBack();
+  }
+
+  /** A new size for the board (field-of-view fit), without replaying the pop-in. */
+  setScale(scale: number): void {
+    this.appearScale = scale;
+    if (this.appearT < 0) this.object.scale.setScalar(scale);
   }
 
   setStatus(status: BoardStatus): void {
@@ -708,6 +762,15 @@ export class Board {
       font(c, 54, 700);
       c.fillStyle = COLORS.text;
       c.fillText('Agent Wall', 44, 86);
+      if (this.queueLine.text) {
+        const x0 = 44 + c.measureText('Agent Wall').width + 28;
+        const room = W - 44 - (LAYOUT.move.w + LAYOUT.voice.w) * PX_PER_M - 40 - x0;
+        let size = 22;
+        font(c, size, 700);
+        while (size > 13 && c.measureText(this.queueLine.text).width > room) font(c, --size, 700);
+        c.fillStyle = this.queueLine.clear ? COLORS.green : COLORS.muted;
+        c.fillText(this.queueLine.text, x0, 84);
+      }
       // Which build this is, so a tester can tell us what they ran.
       font(c, 14, 500);
       c.fillStyle = COLORS.faint;
@@ -749,7 +812,9 @@ export class Board {
         c.fillText(hint, (W - c.measureText(hint).width) / 2, mid - 8);
         font(c, 26);
         c.fillStyle = COLORS.muted;
-        const how = 'Point your hand at a chip, then tap your thumb and index finger together';
+        const how = this.lookMode
+          ? 'Look at a chip, then tap your thumb and index finger together'
+          : 'Point your hand at a chip, then tap your thumb and index finger together';
         c.fillText(how, (W - c.measureText(how).width) / 2, mid + 36);
       }
     });
