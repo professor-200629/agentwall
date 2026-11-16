@@ -15,6 +15,9 @@
  *   time that is now busy is BLOCKED at once. The wall keeps the old time (CONFLICT)
  *   and offers up to two others; pinching one is only a trial; a fresh hold approves
  *   the exact card shown, and the old item stays as history with nothing to hand off.
+ * - Moving things: the board and the desk card each have a grab bar, like a Quest
+ *   window. Pinch the bar and move your hand; push away to send it farther. A board
+ *   let go near a real wall snaps onto it.
  * - Saving: the plan, the outbox and the example change are kept in localStorage.
  *
  * Decisions live in ./logic (plain TS, unit-tested). Pinch input comes from
@@ -53,10 +56,11 @@ import {
   whenLabel,
   type Review,
 } from './logic/review.js';
-import { chooseDesk, type DeskPlacement } from './logic/desk.js';
+import { cardScale, chooseDesk, faceEyes, type DeskPlacement } from './logic/desk.js';
+import { along, centreFromGrab, DRAG, facing, pushPull, snapToWall } from './logic/drag.js';
 import { HOLD, HoldToApprove } from './logic/hold.js';
 import { PlacementController } from './logic/placement-controller.js';
-import { fallbackPlacement, isWallLabel, type PlaneInput, type Placement } from './logic/placement.js';
+import { boardScaleFor, fallbackPlacement, isWallLabel, type PlaneInput, type Placement } from './logic/placement.js';
 import { parsePrint, SAME_WALL, serializePrint, wallPrint, type WallPrint } from './logic/same-wall.js';
 import {
   addToOutbox,
@@ -139,10 +143,17 @@ interface PointerHit {
   pointerType: string;
   /** Where on the mesh's texture the ray hit (0..1). */
   uv?: { x: number; y: number };
+  /** The hit in world space. While a pinch is captured it stays on the ray, at the distance of the first hit. */
+  point?: { x: number; y: number; z: number };
+  /** Where the ray starts in world space (the hand, or the camera for a mouse). */
+  pointerPosition?: { x: number; y: number; z: number };
 }
 
 interface PointerTarget {
-  addEventListener(type: 'pointerdown' | 'pointermove' | 'pointerleave', listener: (e: PointerHit) => void): void;
+  addEventListener(
+    type: 'pointerdown' | 'pointermove' | 'pointerleave' | 'pointerup' | 'pointercancel',
+    listener: (e: PointerHit) => void,
+  ): void;
   setPointerCapture(pointerId: number): void;
 }
 
@@ -226,7 +237,9 @@ export interface AgentWallDebug {
   };
   outbox: () => OutboxItem[];
   /** Where the invite card went: the real table or the lap spot. */
-  desk: () => { kind: string; position: number[]; visible: boolean } | null;
+  desk: () => { kind: string; position: number[]; visible: boolean; scale: number } | null;
+  /** Grab bars: what is being dragged now, how many drags ended, the board's status chip. */
+  drag: () => { active: string | null; count: number; cardPlacedByYou: boolean; status: string };
   /** The week mural: sweep still playing? how many half hours ruled out? */
   mural: () => { visible: boolean; sweeping: boolean; ruledOut: number; fresh: number };
   /** Unsend window and conflict state. */
@@ -445,6 +458,24 @@ export class BoardSystem extends createSystem({
   private fovOverride: Fov | null = null;
   private placed: Placement | null = null;
   private gazeOn = false;
+  /** A grab bar is pinched: what moves, and where on it the pinch landed. */
+  private drag: { what: 'board' | 'card'; pointerId: number; d0: number; r0: number; lx: number; ly: number; moved: boolean } | null =
+    null;
+  /** Where the pinch landed, and how the card was turned in the last frame of a drag. */
+  private dragStart = new Vector3();
+  private dragYaw = 0;
+  private dragTilt = 0;
+  private dragPoint = new Vector3();
+  private dragOrigin = new Vector3();
+  private dragDirty = false;
+  private dragEuler = new Euler(0, 0, 0, 'YXZ');
+  private dragQuat = new Quaternion();
+  private dragOffset = new Vector3();
+  private dragCount = 0;
+  /** You dragged the card somewhere: it stays there until the room's coordinates change. */
+  private deskUserPlaced = false;
+  private boardGrabEntity!: Entity;
+  private deskGrabEntity!: Entity;
 
   init(): void {
     this.board = new Board();
@@ -468,6 +499,8 @@ export class BoardSystem extends createSystem({
     this.candidateEntities = this.board.candidateButtons.map((b) => interactive(b.mesh, boardEntity));
     this.reviewCancelEntity = interactive(this.board.reviewCancel.mesh, boardEntity);
     this.calendarEntity = interactive(this.board.calendarButton.mesh, boardEntity);
+    this.boardGrabEntity = interactive(this.board.boardGrab.mesh, boardEntity);
+    this.deskGrabEntity = interactive(this.board.deskGrab.mesh, deskEntity);
     if (readStorage(VOICE_KEY) === 'off') setSpeechEnabled(false);
     // The board itself is a (do-nothing) ray target: IWSDK only shows the hand ray's
     // cursor on targets, and the first Quest tester saw no pointer until exactly on a chip.
@@ -493,6 +526,20 @@ export class BoardSystem extends createSystem({
     this.board.candidateButtons.forEach((b, i) => onPress(b.mesh, { kind: 'candidate', index: i }));
     onPress(this.board.reviewCancel.mesh, { kind: 'review-cancel', index: 0 });
     onPress(this.board.calendarButton.mesh, { kind: 'calendar', index: 0 });
+    // Grab bars: the captured ray keeps reporting where it points, so the thing follows the hand.
+    const grab = (mesh: unknown, what: 'board' | 'card') => {
+      const target = mesh as PointerTarget;
+      target.addEventListener('pointerdown', (e) => {
+        if (e.pointerType === 'touch') return;
+        capture(target, e);
+        this.startDrag(what, e);
+      });
+      target.addEventListener('pointermove', (e) => this.moveDrag(e));
+      target.addEventListener('pointerup', () => this.endDrag());
+      target.addEventListener('pointercancel', () => this.endDrag());
+    };
+    grab(this.board.boardGrab.mesh, 'board');
+    grab(this.board.deskGrab.mesh, 'card');
     // A pinch on the bare board does nothing, but it still captures the ray so the
     // release always arrives (see capture()).
     const back = this.board.backPanel.mesh as unknown as PointerTarget;
@@ -520,6 +567,7 @@ export class BoardSystem extends createSystem({
     });
     const release = () => {
       this.inviteHeld = false;
+      this.endDrag(); // the hand opened: whatever was being moved stays where it is
     };
     window.addEventListener('pointerup', release);
     window.addEventListener('pointercancel', release);
@@ -583,10 +631,18 @@ export class BoardSystem extends createSystem({
     this.xrManager.addEventListener('sessionstart', onSessionStart);
     this.cleanupFuncs.push(() => this.xrManager.removeEventListener('sessionstart', onSessionStart));
 
+    let wasFlat: boolean | null = null;
     this.cleanupFuncs.push(
       this.world.visibilityState.subscribe((v) => {
         // The system menu or another layer took over: a hold in progress does not count.
         if (v === VisibilityState.VisibleBlurred) this.cancelHold('the view was interrupted');
+        // Entering or leaving mixed reality changes the coordinates: a hand-placed card starts over.
+        const nowFlat = v === VisibilityState.NonImmersive;
+        if (nowFlat !== wasFlat) {
+          this.drag = null;
+          this.deskUserPlaced = false;
+        }
+        wasFlat = nowFlat;
         if (v === VisibilityState.NonImmersive) {
           this.controller.stop();
           this.pendingStart = false;
@@ -608,6 +664,7 @@ export class BoardSystem extends createSystem({
     this.attachReset();
     this.voice.tick();
     this.updateInteraction(delta);
+    this.updateDrag();
     this.updateView();
     const palmT0 = performance.now();
     this.updatePalm(delta);
@@ -961,7 +1018,13 @@ export class BoardSystem extends createSystem({
     // A blocked card (the old time in a review) can never be approved: only a trial can.
     const blockedCard = this.review !== null && this.review.trial === null;
     const canApprove =
-      live && !this.busy && !this.board.sweeping && current?.invite != null && current.approval === 'needs' && !blockedCard;
+      live &&
+      !this.busy &&
+      !this.board.sweeping &&
+      current?.invite != null &&
+      current.approval === 'needs' &&
+      !blockedCard &&
+      this.drag === null;
     const pressed = this.inviteHeld || this.inviteEntity.hasComponent(Pressed);
     if (!this.board.desk.visible) this.inviteHeld = false;
     if (pressed) this.controller.lock();
@@ -979,6 +1042,9 @@ export class BoardSystem extends createSystem({
       this.reviewCancelEntity.hasComponent(Hovered),
     );
     this.board.setCalendarButton(this.calendarControl(), this.calendarEntity.hasComponent(Hovered));
+    const dragging = this.drag?.what;
+    this.board.setGrab('board', dragging === 'board' ? 'drag' : this.boardGrabEntity.hasComponent(Hovered) ? 'hover' : 'idle');
+    this.board.setGrab('card', dragging === 'card' ? 'drag' : this.deskGrabEntity.hasComponent(Hovered) ? 'hover' : 'idle');
     this.updateMuralHover();
     this.board.setVoiceButton(speechEnabled(), this.voiceEntity.hasComponent(Hovered));
     const moveLeft = this.moveUntil === null ? 0 : Math.max(1, Math.ceil(this.moveUntil - this.clockS));
@@ -1836,7 +1902,161 @@ export class BoardSystem extends createSystem({
       this.say('', 'muted');
     }
     // The desk decides: the invite card goes to the real table in front, or the lap.
-    this.placeDesk(chooseDesk(this.headPos, this.headFwd, this.lastPlanes));
+    // A card you dragged somewhere stays there (a recenter moves the coordinates, so it starts over).
+    if (why === 'recenter') this.deskUserPlaced = false;
+    if (!this.deskUserPlaced) this.placeDesk(chooseDesk(this.headPos, this.headFwd, this.lastPlanes));
+  }
+
+  // ---------- grab and move ----------
+
+  /** The eyes: the headset in mixed reality, the camera in the desktop preview. */
+  private readHead(): void {
+    if (this.world.visibilityState.value === VisibilityState.NonImmersive) this.world.camera.getWorldPosition(this.headPos);
+    else this.player.head.getWorldPosition(this.headPos);
+  }
+
+  private startDrag(what: 'board' | 'card', e: PointerHit): void {
+    if (this.drag || !e.point || !e.pointerPosition) return;
+    const obj = what === 'board' ? this.board.object : this.board.desk;
+    if (!obj.visible || (what === 'card' && this.board.sweeping)) return;
+    this.controller.lock(); // you are placing it yourself: no automatic moves after this
+    this.moveUntil = null;
+    this.hold.cancel();
+    this.inviteHeld = false;
+    this.readHead();
+    this.dragPoint.set(e.point.x, e.point.y, e.point.z);
+    this.dragOrigin.set(e.pointerPosition.x, e.pointerPosition.y, e.pointerPosition.z);
+    // Where on the thing the pinch landed, in its own metres, so it does not jump under the hand.
+    obj.updateWorldMatrix(true, false);
+    obj.worldToLocal(this.tmp.copy(this.dragPoint));
+    this.dragStart.copy(this.dragPoint);
+    this.drag = {
+      what,
+      pointerId: e.pointerId,
+      d0: this.dragPoint.distanceTo(this.dragOrigin),
+      r0: this.dragOrigin.distanceTo(this.headPos),
+      lx: this.tmp.x,
+      ly: this.tmp.y,
+      moved: false,
+    };
+    this.dragDirty = false;
+    this.say(
+      what === 'board' ? 'Moving the board · let go to place it · near a wall it snaps on' : 'Moving the card · let go to place it',
+      'ai',
+    );
+    playTick();
+  }
+
+  private moveDrag(e: PointerHit): void {
+    if (!this.drag || e.pointerId !== this.drag.pointerId || !e.point || !e.pointerPosition) return;
+    this.dragPoint.set(e.point.x, e.point.y, e.point.z);
+    this.dragOrigin.set(e.pointerPosition.x, e.pointerPosition.y, e.pointerPosition.z);
+    this.dragDirty = true;
+  }
+
+  /** While a grab bar is pinched: the thing follows the ray; a hand pushed away sends it farther. */
+  private updateDrag(): void {
+    const d = this.drag;
+    if (!d || !this.dragDirty) return;
+    this.dragDirty = false;
+    this.readHead();
+    const isBoard = d.what === 'board';
+    const dist = pushPull(
+      d.d0,
+      d.r0,
+      this.dragOrigin.distanceTo(this.headPos),
+      isBoard ? DRAG.boardGain : DRAG.cardGain,
+      isBoard ? DRAG.boardMin : DRAG.cardMin,
+      isBoard ? DRAG.boardMax : DRAG.cardMax,
+    );
+    // Where the pinched point of the bar should be now.
+    const target = along(this.dragOrigin, this.dragPoint, dist);
+    // A tap on a bar, or a hand that only trembles, moves nothing.
+    if (!d.moved) {
+      if (Math.hypot(target.x - this.dragStart.x, target.y - this.dragStart.y, target.z - this.dragStart.z) < DRAG.deadZone) return;
+      d.moved = true;
+    }
+    if (isBoard) {
+      const o = this.board.object;
+      const yaw = facing(target, this.headPos);
+      const c = centreFromGrab(target, yaw, d.lx, d.ly, o.scale.x);
+      o.position.set(c.x, c.y, c.z);
+      o.rotation.set(0, yaw, 0);
+      return;
+    }
+    // The card turns to face the eyes, leaning back when it is below them.
+    const turn = faceEyes(this.headPos, target);
+    this.dragYaw = turn.yaw;
+    this.dragTilt = turn.tilt;
+    this.dragEuler.set(-turn.tilt, turn.yaw, 0, 'YXZ');
+    this.dragQuat.setFromEuler(this.dragEuler);
+    const s = this.board.desk.scale.x;
+    this.dragOffset.set(d.lx * s, d.ly * s, 0).applyQuaternion(this.dragQuat);
+    this.board.setDeskPose(target.x - this.dragOffset.x, target.y - this.dragOffset.y, target.z - this.dragOffset.z, this.dragEuler, s);
+  }
+
+  /** The pinch opened: the board snaps to a wall it is near, or floats where it is; the card stays. */
+  private endDrag(): void {
+    const d = this.drag;
+    if (!d) return;
+    this.drag = null;
+    this.dragDirty = false;
+    this.dragCount++;
+    if (!d.moved) {
+      // Pinched but never moved: everything is where it was.
+      this.say(d.what === 'board' ? 'Pinch the bar and move your hand to move the board' : 'Pinch the bar and move your hand to move the card', 'muted');
+      return;
+    }
+    this.readHead();
+    const head = { x: this.headPos.x, y: this.headPos.y, z: this.headPos.z };
+    const flat = this.world.visibilityState.value === VisibilityState.NonImmersive;
+    if (d.what === 'card') {
+      const c = this.board.desk.position;
+      const position = { x: c.x, y: c.y, z: c.z };
+      this.deskUserPlaced = true;
+      // It keeps the turn it had under your hand; only its size follows the new distance.
+      this.placeDesk({
+        kind: 'placed',
+        position,
+        yaw: this.dragYaw,
+        tilt: this.dragTilt,
+        scale: flat ? this.board.desk.scale.x : cardScale(head, position),
+      });
+      this.say('Card placed · it stays here · drag its bar to move it again', 'ok');
+      playTick();
+      return;
+    }
+    const o = this.board.object;
+    const centre = { x: o.position.x, y: o.position.y, z: o.position.z };
+    const distance = Math.hypot(centre.x - head.x, centre.y - head.y, centre.z - head.z);
+    if (flat) {
+      this.placed = { kind: 'fallback', position: centre, yaw: o.rotation.y, distance, scale: o.scale.x };
+      this.say('Board moved', 'ok');
+      return;
+    }
+    this.lastPlanes = this.collectPlanes();
+    // Far boards are drawn larger so the text stays readable (the same rule as on a far wall).
+    const scale = boardScaleFor(distance);
+    const p: Placement = snapToWall(centre, head, this.lastPlanes, scale) ?? {
+      kind: 'fallback',
+      position: centre,
+      yaw: o.rotation.y,
+      distance,
+      scale,
+    };
+    o.position.set(p.position.x, p.position.y, p.position.z);
+    o.rotation.set(0, p.yaw, 0);
+    this.placed = p;
+    this.board.setScale(this.fittedScale(p));
+    if (p.kind === 'wall') {
+      this.board.setStatus('wall');
+      this.rememberWall(p);
+      this.say('Board is on your wall · it comes back here next time', 'ok');
+    } else {
+      this.board.setStatus('placed');
+      this.say('Board placed · pinch and drag its bar to move it again', 'ok');
+    }
+    playTick();
   }
 
   /** Save the wall's fingerprint so the next session can find the same spot. */
@@ -1850,7 +2070,7 @@ export class BoardSystem extends createSystem({
 
   private placeDesk(d: DeskPlacement): void {
     this.deskPlace = d;
-    this.board.setDeskPose(d.position.x, d.position.y, d.position.z, new Euler(-d.tilt, d.yaw, 0, 'YXZ'));
+    this.board.setDeskPose(d.position.x, d.position.y, d.position.z, new Euler(-d.tilt, d.yaw, 0, 'YXZ'), d.scale);
   }
 
   private showDesktopPreview(): void {
@@ -1863,7 +2083,7 @@ export class BoardSystem extends createSystem({
     this.board.setStatus('preview');
     const pos = { x: this.headPos.x + 0.48, y: this.headPos.y - 0.26, z: this.headPos.z - 0.95 };
     const back = { x: this.headPos.x - pos.x, z: this.headPos.z - pos.z };
-    this.placeDesk({ kind: 'lap', position: pos, yaw: Math.atan2(back.x, back.z), tilt: 0.2 });
+    this.placeDesk({ kind: 'lap', position: pos, yaw: Math.atan2(back.x, back.z), tilt: 0.2, scale: INVITE.deskScale });
   }
 
   // ---------- test hooks ----------
@@ -1912,6 +2132,8 @@ export class BoardSystem extends createSystem({
           cand1: at(this.board.candidateButtons[1].mesh),
           'review:cancel': at(this.board.reviewCancel.mesh),
           calendar: at(this.board.calendarButton.mesh),
+          'grab:board': at(this.board.boardGrab.mesh),
+          'grab:card': at(this.board.deskGrab.mesh),
           move: at(this.board.moveButton.mesh),
           voice: at(this.board.voiceButton.mesh),
           mural: at(this.board.mural.mesh),
@@ -1944,8 +2166,15 @@ export class BoardSystem extends createSystem({
               kind: this.deskPlace.kind,
               position: [this.deskPlace.position.x, this.deskPlace.position.y, this.deskPlace.position.z],
               visible: this.board.desk.visible,
+              scale: this.deskPlace.scale,
             }
           : null,
+      drag: () => ({
+        active: this.drag?.what ?? null,
+        count: this.dragCount,
+        cardPlacedByYou: this.deskUserPlaced,
+        status: this.board.status,
+      }),
       muralPoint: (dayIndex, minute) => this.board.muralPoint(dayIndex, minute),
       weekCells: () => this.currentWeek()?.cells ?? [],
       mural: () => ({

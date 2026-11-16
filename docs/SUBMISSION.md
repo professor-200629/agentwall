@@ -58,6 +58,13 @@ hardware), the same eleven shots apply; the tester follows
 | 11 | 1:03 – 1:12 | The start page: the old item struck out, "Email, calendar file and copy are off". The new one: **Open email draft**, **Add to my calendar**. | "The new one waits as an email draft and a calendar file, in my own apps. Agent Wall sends nothing." | Agent Wall sends nothing |
 | End | 1:12 – 1:18 | Link and one line. | (none) | professor-200629.github.io/agentwall · WebXR, hands only, Meta IWSDK · "Recorded in Meta's emulator" (or "Recorded on Quest 3" if a tester records it) |
 
+Optional opening, from the mentors' advice (16 Nov) that the first 10 seconds
+must show what the app is and that "grabbing events left and right" is what
+makes a calendar interesting: start with 3 seconds of the hand pinching the bar
+on top of the board, dragging the week across the room and letting it snap onto
+the wall. Then shot 1. (The script does not play this yet; record it by hand in
+the emulator, or ask a tester.)
+
 Optional shot 7b (adds about 9 s, `AI=1` in the script): pinch 🎤 and say
 **"Could we push it past three o'clock?"**. The bar answers "LIVE AI understood
 'only after 3 PM' · now Wed 5:30 PM and Thu 3:30 PM". Use it only if it is
@@ -67,9 +74,10 @@ spoken limit changes the search. The AI never approves anything."
 
 ### What the video must not claim
 
-- Not "tested on Quest" for this flow, unless a person has run this build on one
-  by then. What a Quest tester did confirm (builds up to `e340f98`) is listed in
-  the README.
+- The conflict flow was run on a Quest 3 by a Meta mentor on 16 Nov (README,
+  "Status"). You may say that. Do not say the grab bars or the card's new place
+  were tested on a headset unless someone has done it by then, and do not quote
+  a frame rate: nobody measured one.
 - Not "sends the invite". It never does.
 - The busy block is an example: the caption in shots 2 and 3 stays.
 
@@ -131,16 +139,21 @@ one draw call each. A small Cloudflare Worker keeps the Groq key off the page.
 
 One hand ray. A pinch selects; a one-second hold commits. The review's targets
 are about 22 x 9 cm with pads that meet halfway, so a wobbling ray still lands
-on one. The ray is captured for the length of a pinch, so a release is never
-lost. An open palm toward your face brings the board to you. Hands stay in the
-lap; nothing asks you to reach for the wall.
+on one. The board and the card each have a grab bar, like a Quest window: pinch
+it and move your hand, push away to send it far, and the board snaps onto a wall
+you let it go near. An open palm toward your face brings the board to you. Hands
+stay in the lap; nothing asks you to reach for the wall.
 
 **What is tested, and what is not**
 
-A Quest owner on the Meta forum tested earlier builds on a real headset: wall
-placement, Move board, recenter, the hold ring and chime, the palm gesture. The
-conflict review has run in Meta's emulator only (46 checks with real emulated
-pinches). Frame rate on a Quest has not been measured.
+Two people have run it on a real headset. A Quest owner on the Meta forum
+tested earlier builds: wall placement, Move board, recenter, the hold ring and
+chime, the palm gesture. A Meta Start mentor ran the conflict review on a Quest 3
+in a live mentor session and said it worked well, the hand tracking "works
+perfectly" and it "felt really smooth". He asked for two changes (the card
+farther away; grab and move the calendar), which I made that evening. Those two
+have run in Meta's emulator only (22 checks with real emulated pinches). No
+frame rate was measured on a Quest.
 
 **What is next**
 

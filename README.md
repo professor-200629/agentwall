@@ -8,14 +8,23 @@ hold, and Agent Wall itself sends nothing.
 Entry for the Meta VR Start Developer Competition 2026 (Productivity track).
 Built with Meta's [Immersive Web SDK](https://iwsdk.dev) (WebXR), hands only.
 
-**Status: 16 Nov.** Real AI connected. **Tested on a real Quest** by steve40
-(Meta forum, builds up to `e340f98`): wall placement, Move board and recenter
-("Cool, it's perfect now"), the hold ring and its chime, and the palm-up gesture
-("Open palm worked to reposition the board. No false triggers."). He heard no
-agent voice; that was changed to recorded clips afterwards and has not been
-confirmed on a headset. **Everything added since, including the conflict review
-below, has run in Meta's emulator (IWER) only.** Frame rate on a Quest has not
-been measured. **Have a Quest? Please try
+**Status: 16 Nov.** Real AI connected. Two people have run it on a real headset:
+
+- **steve40** (Meta forum, builds up to `e340f98`): wall placement, Move board
+  and recenter ("Cool, it's perfect now"), the hold ring and its chime, and the
+  palm-up gesture ("Open palm worked to reposition the board. No false
+  triggers."). He heard no agent voice; that was changed to recorded clips
+  afterwards and has not been confirmed on a headset.
+- **A Meta Start mentor, live in the "Monday Unblock" session of 16 Nov, on a
+  Quest 3** (the live site was build `8618557`; he did not read the number out):
+  the conflict review below. In the session's captions: "Yes, I see the red
+  conflict here", "it's working quite well and the hand tracking works
+  perfectly", "It felt really smooth" (an impression; no frame rate was
+  measured). He asked for two changes, both made the same evening and listed
+  under "Fixes from the mentor's Quest 3 test" below. **Those two changes have
+  run in Meta's emulator (IWER) only.**
+
+**Have a Quest? Please try
 [docs/TESTING-ON-QUEST.md](docs/TESTING-ON-QUEST.md).**
 
 ## The core interaction: an approved time stops fitting
@@ -74,6 +83,19 @@ no microphone, no network or an unclear sentence the two targets still work.
 a calendar file you already added, is outside it. The start page says so on a
 blocked item.
 
+**Move things with your hand:** the board has a grab bar on top and the desk
+card has one underneath, like the bar of a floating window in Quest. Pinch a bar
+and move your hand: the thing follows the hand ray and turns to face you. Push
+your hand away and the board goes much farther (15 cm of hand is about 90 cm of
+board); pull to bring it closer. Let the board go within 35 cm of a real wall
+and it snaps onto the wall and is remembered there. The card stays where you
+put it, and the next card lands in the same place. A pinch on a bar that does
+not move changes nothing, and a pinch on a bar is never an approval.
+
+| Pinch the bar on top: the board follows your hand | The card, moved where you want it |
+| --- | --- |
+| ![Dragging the board](docs/screenshots/drag-1-board.png) | ![The card placed by hand](docs/screenshots/drag-2-card.png) |
+
 | The change on the wall: old time kept, the reason | Try a time: a preview, the old conflict stays |
 | --- | --- |
 | ![Conflict on the wall](docs/screenshots/review-1-conflict.png) | ![Preview on the week](docs/screenshots/review-2-preview.png) |
@@ -84,7 +106,10 @@ Checked with real emulated hand pinches in Meta's emulator:
 `node scripts/emu/review.mjs` (46 checks: blocking, the trial, cancel, an early
 release, hand tracking lost mid-hold, a new conflict mid-hold, the fresh hold,
 the start page before and after a reload, a second change, a spoken limit,
-reduced motion, no room data) and in `tests/review.test.ts`. Not on a headset.
+reduced motion, no room data) and in `tests/review.test.ts`. The grab bars and
+the card's new place: `node scripts/emu/drag.mjs` (22 checks) and
+`tests/drag.test.ts`. The conflict review itself was then run by a Meta mentor
+on a Quest 3 (see the status above); the grab bars have not been on a headset.
 
 ## Everything else it does
 
@@ -256,6 +281,7 @@ Emulator checks (dev server must be running headless):
 ```bash
 npx iwsdk dev up --headless --allow-browser-automation
 node scripts/emu/review.mjs         # the conflict review, start to end (46 checks)
+node scripts/emu/drag.mjs           # grab bars for the board and the card, the card's distance (22 checks)
 node scripts/emu/run.mjs            # placement, asking, approving, the desk (93 checks)
 node scripts/emu/new-features.mjs   # queue, learned rule, view fit, look + pinch (19 checks)
 node scripts/emu/real-calendar.mjs  # your own calendar, a newer file, a failed re-read (26 checks)
@@ -291,6 +317,19 @@ checked on purpose only: `npx vitest run --config vitest.live.config.ts`.
   checked on a Quest: Space Setup reports the same wall sizes every session.
 - `src/board-system.ts`: the IWSDK system that feeds detected planes and the
   head pose into that logic and moves the board.
+
+## Fixes from the mentor's Quest 3 test (16 Nov)
+
+| What the mentor said | Cause | Fix |
+| --- | --- | --- |
+| "The card that would show up is way too close. So I had to go a little bit back all the time." | With no table in reach the card sat 45 cm ahead, 57 cm from the eyes; on a table it sat 14 cm in from the near edge | It now sits about 80 cm from the eyes (62 cm ahead, lower, leaning back like a sheet on a desk), a little larger; on a table it goes up to 65 cm ahead |
+| "You are used to grabbing it and putting it far or moving it to the wall... it feels a little bit weird that you have to accommodate yourself instead of fixing the window." | The board could only be moved by the "Move board" button (look at a wall for 3 s) or the palm gesture; the card could not be moved at all | A grab bar on top of the board and one under the card: pinch and drag, push away to send it far, and the board snaps to a wall you let it go near |
+
+Found while building this, in the emulator: with the bar under the board, the
+card stood between a resting hand and the bar, and a pinch aimed at the bar
+landed on the card and approved it. So the board's bar is on top, and the card
+sits low enough that a ray from a hand in the lap to the lowest row of the week
+clears it (a unit test checks the geometry).
 
 ## Fixes from the first Quest test (15 Nov)
 
@@ -377,7 +416,14 @@ checked on purpose only: `npx vitest run --config vitest.live.config.ts`.
   approved. An approved invite sits in a 5 s Unsend window, then gets its
   RULES / AI / YOU receipt.
 - `src/logic/desk.ts`: picks a horizontal plane labelled table or desk at
-  0.55–1.15 m high and within 1 m reach for the invite; otherwise the lap spot.
+  0.55–1.15 m high and within 1 m reach for the invite, and puts the card up to
+  65 cm ahead on it; otherwise in front of the seat, about 80 cm from the eyes.
+  The card is drawn larger the farther it is (with the square root of the
+  distance).
+- `src/logic/drag.ts`: the grab bars. How far along the hand ray the pinched
+  point is (push and pull), where the board's centre must be so the bar stays
+  under the ray, and the snap onto a real wall. `src/board-system.ts`
+  (`startDrag`, `updateDrag`, `endDrag`) feeds it the captured pointer's ray.
 - `src/board-system.ts`: IWSDK `RayInteractable` on the invite, the
   alternatives and the chips (pinch only: a finger-poke target on the desk card
   would take priority over the hand ray and block the chips). A pinch that starts

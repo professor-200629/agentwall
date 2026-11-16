@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import calendarJson from '../src/data/sample-calendar.json';
-import { chooseDesk, DESK, lapPlacement } from '../src/logic/desk.js';
+import { cardScale, chooseDesk, DESK, faceEyes, lapPlacement } from '../src/logic/desk.js';
 import type { PlaneInput } from '../src/logic/placement.js';
 import { approve, buildReceipt, makePlan, unapprove } from '../src/logic/plan.js';
 import { freeSlots, schedule, type CalendarData } from '../src/logic/scheduler.js';
@@ -86,15 +86,24 @@ describe('chooseDesk: the invite goes to your real table, or your lap', () => {
     ...over,
   });
 
-  it('puts the card on the near edge of a table in front, facing you, tilted up', () => {
+  it('puts the card on a table in front, a comfortable distance away, facing you, tilted up', () => {
+    // The near edge is 30 cm away: 14 cm in from it (the old rule) was "way too close" on a Quest 3.
     const d = chooseDesk(head, fwd, [table()]);
     expect(d.kind).toBe('desk');
     expect(d.planeId).toBe(7);
     expect(d.position.x).toBeCloseTo(0);
-    expect(d.position.z).toBeCloseTo(-0.3 - DESK.inset);
+    expect(d.position.z).toBeCloseTo(-0.6); // the table's centre: as far as this small table allows
     expect(d.position.y).toBeCloseTo(0.75 + DESK.lift);
     expect(d.yaw).toBeCloseTo(0);
     expect(d.tilt).toBeGreaterThan(0);
+    // A deep desk: the card sits 65 cm ahead, not at the edge and not at the far centre.
+    const deep = chooseDesk(head, fwd, [
+      table({ position: { x: 0, y: 0.75, z: -1.0 }, polygon: [{ x: -0.8, z: -0.8 }, { x: 0.8, z: -0.8 }, { x: 0.8, z: 0.8 }, { x: -0.8, z: 0.8 }] }),
+    ]);
+    expect(deep.position.z).toBeCloseTo(-DESK.comfort);
+    // A table whose near edge is already far enough: the usual 14 cm in from the edge.
+    const far = chooseDesk(head, fwd, [table({ position: { x: 0, y: 0.75, z: -1.1 } })]);
+    expect(far.position.z).toBeCloseTo(-0.8 - DESK.inset);
   });
 
   it('accepts "desk" and unlabelled tables, ignores floors, couches, far and behind tables', () => {
@@ -106,12 +115,43 @@ describe('chooseDesk: the invite goes to your real table, or your lap', () => {
     expect(chooseDesk(head, fwd, [table({ position: { x: 0, y: 0.75, z: 0.8 } })]).kind).toBe('lap');
   });
 
-  it('lap spot: 45 cm ahead, 35 cm below the eyes', () => {
+  it('no table: about 80 cm from the eyes, low and leaning back, a little larger', () => {
     const l = lapPlacement(head, fwd);
     expect(l).toMatchObject({ kind: 'lap' });
-    expect(l.position.z).toBeCloseTo(-0.45);
-    expect(l.position.y).toBeCloseTo(0.85);
+    expect(l.position.z).toBeCloseTo(-0.62);
+    expect(l.position.y).toBeCloseTo(0.68);
     expect(l.yaw).toBeCloseTo(0);
+    // About 80 cm from the eyes (it was 57 cm, "way too close" on a Quest 3).
+    const d = Math.hypot(l.position.z, l.position.y - head.y);
+    expect(d).toBeGreaterThan(0.8);
+    // Larger in the room, a little smaller in your view: the square root of the distance.
+    expect(l.scale / DESK.baseScale).toBeCloseTo(Math.sqrt(d / DESK.scaleAt));
+    expect(l.scale).toBeGreaterThan(0.64);
+    expect(l.scale).toBeLessThan(0.67);
+    expect(cardScale(head, { x: 0, y: 0.85, z: -0.45 })).toBeCloseTo(0.55, 2); // the old spot gives the old size
+    expect(cardScale(head, { x: 0, y: 1.2, z: -9 })).toBe(DESK.maxScale);
+    expect(cardScale(head, head)).toBe(DESK.minScale);
+  });
+
+  it('the card does not stand between a resting hand and the board', () => {
+    // No table, the board floating 1.2 m ahead at eye height: its bottom edge is at 0.73 m.
+    const l = lapPlacement(head, fwd);
+    const half = (0.52 * l.scale) / 2; // half the card's height
+    const top = { y: l.position.y + half * Math.cos(l.tilt), z: l.position.z - half * Math.sin(l.tilt) };
+    // A ray from a hand resting in the lap (85 cm high, 30 cm ahead) to a point on the board:
+    const rayY = (targetY: number) => 0.85 + ((targetY - 0.85) * (top.z + 0.3)) / (-1.2 + 0.3);
+    expect(rayY(0.85)).toBeGreaterThan(top.y + 0.05); // the lowest row of the week clears the card by 5 cm
+    expect(rayY(0.8)).toBeGreaterThan(top.y + 0.02); // so does the outbox tray
+  });
+
+  it('a card you drag turns to face your eyes wherever you take it', () => {
+    const p = faceEyes(head, { x: 0.5, y: 0.9, z: -0.5 });
+    expect(p.yaw).toBeCloseTo(Math.atan2(-0.5, 0.5)); // its front points back at the head
+    expect(p.tilt).toBeCloseTo(Math.atan2(0.3, Math.hypot(0.5, 0.5)));
+    // Above the eyes it stands upright; straight below them it leans back no further than the limit.
+    expect(faceEyes(head, { x: 0, y: 1.6, z: -0.6 }).tilt).toBe(0);
+    expect(faceEyes(head, { x: 0, y: 0.4, z: -0.01 }).tilt).toBe(DESK.maxTilt);
+    expect(faceEyes(head, { x: 0, y: 0.4, z: 0 }).yaw).toBe(0); // straight below: no spin
   });
 });
 

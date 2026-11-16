@@ -60,6 +60,18 @@ Sit down, hands in your lap. Please tell me your **headset model** and the
     headset does not know). The board floats and the card sits in front of you.
     Are both times on the card still readable together?
 
+11. **New on 16 Nov evening, never on a headset: moving things.** A Meta mentor
+    said the card was "way too close" and that he wanted to grab the calendar.
+    - Is the card on your desk (or in front of your seat) at a comfortable
+      distance now? Can you read it without leaning back?
+    - There is a bar **on top of the board** ("Pinch and drag to move"). Pinch
+      it and move your hand. Does the board follow? Push your hand away from
+      you: does it go farther? Let it go close to a wall: does it snap on?
+    - There is a bar **under the card** ("Drag to move"). Pinch it and move the
+      card somewhere else. Does it stay? Does the next card land there too?
+    - Pinch a bar and do not move: nothing should change. Pinching a bar should
+      never start the approve ring.
+
 Most useful of all: **did it feel smooth or stuttery** while the card flew to
 the desk and while the preview appeared? (Quest Browser: three-dot menu ›
 "Show FPS", if you have it.) Meta asks for 60 fps and I have no number at all.

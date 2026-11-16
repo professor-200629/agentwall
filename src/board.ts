@@ -44,13 +44,14 @@ import {
 import { drawMural, muralGrid, type MuralHover, type MuralView } from './ui/mural.js';
 import { playLand, playWhoosh } from './ui/sound.js';
 
-export type BoardStatus = 'searching' | 'wall' | 'same-wall' | 'fallback' | 'preview';
+export type BoardStatus = 'searching' | 'wall' | 'same-wall' | 'fallback' | 'placed' | 'preview';
 
 const STATUS: Record<BoardStatus, { chip: string; color: string; hint: string }> = {
   searching: { chip: 'LOOKING FOR A WALL', color: '#9aa4b2', hint: 'Looking for a wall…' },
   wall: { chip: 'ON YOUR WALL', color: COLORS.green, hint: '' },
   'same-wall': { chip: 'BACK ON YOUR WALL', color: COLORS.green, hint: '' },
   fallback: { chip: 'FLOATING · NO WALL FOUND', color: COLORS.amber, hint: '' },
+  placed: { chip: 'WHERE YOU PUT IT', color: COLORS.link, hint: '' },
   preview: { chip: 'DESKTOP PREVIEW', color: COLORS.link, hint: '' },
 };
 
@@ -138,6 +139,14 @@ export const INVITE = { w: 0.62, h: 0.52, deskScale: 0.55 };
 const Z = { mural: 0.004, pill: 0.008, replan: 0.012, button: 0.016, cue: 0.02 };
 const GLOW_PAD = 0.03;
 const DESK_HINT = { w: 0.56, h: 0.05 };
+/**
+ * Grab bars, like the bar of a floating window in Quest: pinch and drag to move.
+ * The board's bar is on TOP of the board: under it, the desk card stands between a
+ * resting hand and the bar (the emulator's pinch landed on the card and approved it).
+ * The card's bar is under the card, in the card's own (unscaled) metres.
+ */
+const GRAB = { board: { w: 0.46, h: 0.052, gap: 0.014 }, card: { w: 0.42, h: 0.07, gap: 0.014 } };
+export type GrabLook = 'idle' | 'hover' | 'drag';
 const RING_SEGMENTS = 64;
 /** Seconds the agent's sweep across the week takes. */
 export const SWEEP_SECONDS = 1.8;
@@ -244,6 +253,12 @@ export class Board {
   private cue = new CanvasPanel(BOARD.width + 0.08, BOARD.height + 0.08, 'wall-cue');
   /** A tab under the board: "the card is on your desk", shown when the desk is out of view. */
   private deskHint = new CanvasPanel(DESK_HINT.w, DESK_HINT.h, 'desk-hint');
+  /** The grab bar on top of the board, and the one under the desk card. */
+  readonly boardGrab = new CanvasPanel(GRAB.board.w, GRAB.board.h, 'grab-board');
+  readonly deskGrab = new CanvasPanel(GRAB.card.w, GRAB.card.h, 'grab-card');
+  private grabLooks: Record<'board' | 'card', string> = { board: '', card: '' };
+  /** The desk card's size where it rests (larger when it is farther from the eyes). */
+  private deskScale: number = INVITE.deskScale;
   /** Which calendar this is: the sample week or your own, bottom left. */
   private sourceLabel = { text: '', real: false };
   /** The morning queue's line beside the title, e.g. "TODAY 1 of 2 cleared". */
@@ -279,7 +294,6 @@ export class Board {
   private flySlotId: string | null = null;
   /** Test hook: stretch the flight so slow emulator commands can see it mid-air. */
   flySlowdown = 1;
-  private tmpV = new Vector3();
   private muralHoverKey = '';
   private cueT = -1;
   private popT = -1;
@@ -311,6 +325,9 @@ export class Board {
       c.stroke();
     });
     this.add(this.object, this.cue.mesh, 0, 0, Z.cue, 7);
+    this.add(this.object, this.boardGrab.mesh, 0, BOARD.height / 2 + GRAB.board.gap + GRAB.board.h / 2, Z.pill, 4);
+    hitPad(this.boardGrab.mesh, GRAB.board.w, GRAB.board.h, px(24), px(14));
+    this.setGrab('board', 'idle');
     this.add(this.object, this.deskHint.mesh, 0, -BOARD.height / 2 - DESK_HINT.h / 2 - 0.012, Z.pill, 4);
     this.deskHint.mesh.visible = false;
     this.deskHint.draw((c, w, h) => {
@@ -408,7 +425,11 @@ export class Board {
     this.ring.position.set(0, 0, 0.012);
     this.ring.visible = false;
     this.desk.add(this.ring);
-    this.desk.scale.setScalar(INVITE.deskScale);
+    // The card's grab bar, under the card (and under its glow).
+    this.add(this.desk, this.deskGrab.mesh, 0, -INVITE.h / 2 - GLOW_PAD - GRAB.card.gap - GRAB.card.h / 2, 0.001, 3);
+    hitPad(this.deskGrab.mesh, GRAB.card.w, GRAB.card.h, px(30), px(10));
+    this.setGrab('card', 'idle');
+    this.desk.scale.setScalar(this.deskScale);
     this.desk.visible = false;
 
     for (const m of [
@@ -819,14 +840,33 @@ export class Board {
     return this.flyT >= 0;
   }
 
-  /** Where the desk card should rest; applied at once unless it is flying there. */
-  setDeskPose(x: number, y: number, z: number, rotation: Euler): void {
+  /** Where the desk card should rest, and how large; applied at once unless it is flying there. */
+  setDeskPose(x: number, y: number, z: number, rotation: Euler, scale: number = this.deskScale): void {
     this.deskPos.set(x, y, z);
     this.deskQuat.setFromEuler(rotation);
+    this.deskScale = scale;
     if (this.flyT < 0) {
       this.desk.position.copy(this.deskPos);
       this.desk.quaternion.copy(this.deskQuat);
+      if (this.popT < 0) this.desk.scale.setScalar(scale);
     }
+  }
+
+  /** A grab bar's look: resting, under the ray, or being dragged (redrawn only on change). */
+  setGrab(which: 'board' | 'card', look: GrabLook): void {
+    const key = `${look}|${this.lookMode}`;
+    if (this.grabLooks[which] === key) return;
+    this.grabLooks[which] = key;
+    const panel = which === 'board' ? this.boardGrab : this.deskGrab;
+    const text =
+      look === 'drag'
+        ? which === 'board'
+          ? 'Let go to place · snaps to a wall'
+          : 'Let go to place'
+        : which === 'board'
+          ? 'Pinch and drag to move'
+          : 'Drag to move';
+    panel.draw((c, w, h) => drawGrabBar(c, w, h, text, look));
   }
 
   private startFlight(): boolean {
@@ -895,19 +935,19 @@ export class Board {
       this.desk.position.lerpVectors(this.flyFrom, this.deskPos, e);
       this.desk.position.y += Math.sin(Math.PI * e) * FLY.arc;
       this.desk.quaternion.slerpQuaternions(this.flyFromQuat, this.deskQuat, e);
-      this.desk.scale.setScalar(INVITE.deskScale * (FLY.startScale + (1 - FLY.startScale) * e));
+      this.desk.scale.setScalar(this.deskScale * (FLY.startScale + (1 - FLY.startScale) * e));
       if (t >= 1) {
         this.flyT = -1;
         this.desk.position.copy(this.deskPos);
         this.desk.quaternion.copy(this.deskQuat);
-        this.desk.scale.setScalar(INVITE.deskScale);
+        this.desk.scale.setScalar(this.deskScale);
         playLand();
       }
     }
     if (this.popT >= 0) {
       this.popT += dt;
       const t = Math.min(1, this.popT / 0.4);
-      this.desk.scale.setScalar(INVITE.deskScale * (1 + 0.08 * Math.sin(Math.PI * t)));
+      this.desk.scale.setScalar(this.deskScale * (1 + 0.08 * Math.sin(Math.PI * t)));
       if (t >= 1) this.popT = -1;
     }
   }
@@ -1111,6 +1151,37 @@ function drawButton(
   c.fillStyle = primary ? COLORS.ink : COLORS.text;
   c.textBaseline = 'middle';
   c.fillText(text, (w - c.measureText(text).width) / 2, h / 2 + 1);
+  c.textBaseline = 'alphabetic';
+}
+
+/** A grab bar: six grip dots and a few words, like the bar under a Quest window. */
+function drawGrabBar(c: CanvasRenderingContext2D, w: number, h: number, text: string, look: GrabLook): void {
+  const drag = look === 'drag';
+  roundRect(c, 2, 2, w - 4, h - 4, (h - 4) / 2);
+  c.fillStyle = drag ? COLORS.link : look === 'hover' ? 'rgba(127, 178, 255, 0.42)' : 'rgba(18, 22, 32, 0.9)';
+  c.fill();
+  c.lineWidth = 3;
+  c.strokeStyle = look === 'idle' ? 'rgba(255, 255, 255, 0.38)' : COLORS.link;
+  c.stroke();
+  const ink = drag ? COLORS.ink : COLORS.text;
+  let size = Math.min(24, Math.round(h * 0.46));
+  font(c, size, 700);
+  const dots = 26;
+  while (size > 11 && c.measureText(text).width > w - 48 - dots) font(c, --size, 700);
+  const tw = c.measureText(text).width;
+  const x0 = (w - tw - dots) / 2;
+  // Grip dots, drawn (not a glyph: not every headset font has one).
+  c.fillStyle = ink;
+  const r = Math.max(2, h * 0.055);
+  for (let col = 0; col < 2; col++) {
+    for (let row = 0; row < 3; row++) {
+      c.beginPath();
+      c.arc(x0 + 4 + col * 9, h / 2 - 9 + row * 9, r, 0, Math.PI * 2);
+      c.fill();
+    }
+  }
+  c.textBaseline = 'middle';
+  c.fillText(text, x0 + dots, h / 2 + 1);
   c.textBaseline = 'alphabetic';
 }
 
