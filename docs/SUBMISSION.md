@@ -5,17 +5,36 @@ Experience). Deadline: **18 Nov 2026 12:00 PM PT = 19 Nov 1:30 AM IST**. The
 rules ask for a public YouTube or Vimeo video under three minutes; footage from
 a simulator counts when it shows the same build.
 
-Everything below describes the build on branch `conflict-review`. What ran
-where is said plainly: **emulator** means Meta's browser emulator (IWER) on a
-laptop with real emulated hand pinches; **headset** means a person wore one.
+Everything below describes the live build. What ran where is said plainly:
+**emulator** means Meta's browser emulator (IWER) on a laptop with scripted
+hand pinches; **headset** means a person wore one.
+
+This version (17 Nov) follows an outside review of the entry as a judge would
+meet it. Its main points: the first ten seconds showed a static panel and an
+"example" label instead of the story; every shot was a close-up of one flat
+panel, so nothing looked like a room; the card flying from the wall to the desk
+(the one spatial moment) was off camera; the text was over 700 words and gave
+a fifth of them to what is not tested.
 
 ---
 
-## 1. The video (75 to 85 seconds)
+## 1. The video (55 to 60 seconds)
 
-One story: *an approved time stops fitting, you try another one in the room,
-and one hold approves exactly what you see.* Focus time, the day streak and
-moving a meeting are not in it.
+One story: *my AI agent booked a call and I approved it; my week changed; the
+wall blocks the old plan and shows why; I try another time in the room; one
+hold approves exactly what I see.* Focus time, the day streak and moving a
+meeting are not in it.
+
+Three rules for the picture:
+
+- **Wide, from the seat, whenever something moves.** The wall and the desk in
+  one frame, so the card is seen leaving the week and landing on the desk.
+  Push in only to read the card, for two or three seconds.
+- **Start on the result of a real hold.** Before the take, the script plans a
+  call and approves it with a real hold. The first frame then shows a time the
+  viewer can believe was approved: gold on the wall, a tick in the outbox.
+- **One small corner label for the whole video:** "Sample week · Meta's
+  emulator". It replaces the big "EXAMPLE" captions and the end-card line.
 
 ### How to record it without a headset
 
@@ -31,135 +50,123 @@ terminal:
 node scripts/emu/video-take.mjs
 ```
 
-It plays the sequence below with real emulated hand pinches, smooth head moves
-and pauses, and prints each shot's time. Do not touch the mouse while it runs.
-`SLOW=1.3` stretches every pause if the voice-over needs more room. Record the
-voice afterwards over the picture. Crop the emulator's "Remote Control Active"
-badge at the bottom, or leave it: it is an honest sign that this is the emulator.
+It first sets the scene (about 40 seconds: a plan, a real hold, the Unsend
+window), prints `TAKE STARTS`, and then plays the shots below with scripted
+hand pinches, smooth head moves and pauses, printing each shot's time. Do not
+touch the mouse while it runs. Cut everything before `TAKE STARTS` when you
+edit. `SLOW=1.3` stretches every pause if the voice-over needs more room.
+Record the voice afterwards over the picture, add the captions, and put one
+quiet music track under it that you have the right to use (the YouTube Audio
+Library is free for YouTube videos).
 
 If a tester records on a Quest instead (better: it is the exact build on real
-hardware), the same eleven shots apply; the tester follows
-`docs/TESTING-ON-QUEST.md`, "The 90-second flow".
+hardware), the same shots apply; cut 10 to 15 seconds of it into the video with
+the label "Quest 3 capture".
 
 ### Shot list
 
-| # | Time | Picture | Voice-over | Text on screen |
+| # | Time | Picture | Voice-over | Caption |
 | --- | --- | --- | --- | --- |
-| 1 | 0:00 – 0:04 | Seated view: the board on the wall. One card: "Try it". | "Yesterday I approved a call for Tuesday at one." | Agent Wall · your week on the wall, the decision on your desk |
-| 2 | 0:04 – 0:08 | The hand pinches **Try it**. A red block lands on Tuesday 1 PM. | "This morning my week changed." | EXAMPLE CHANGE · synthetic data |
-| 3 | 0:08 – 0:15 | Lean in. The old time is crossed out and labelled **CONFLICT**; the block that took it sits beside it, **NEW · EXAMPLE**. The bar: "Tue 1:00 PM overlaps a new busy block". | "The time I approved is taken. The wall shows me why, and the old time stays where it was." | |
-| 4 | 0:15 – 0:20 | Look down: the old invite on the desk, red, **BLOCKED**. | "The old invite is blocked at once. Its email draft and calendar file are gone." | Blocked before I did anything |
-| 5 | 0:20 – 0:27 | Back to the wall. Pinch **Wed 5:30 PM**. An amber **PREVIEW** appears on Wednesday; Tuesday's conflict is still there. | "I try another time, in the room. It is only a preview." | |
-| 6 | 0:27 – 0:33 | The card on the desk: "WAS Tue 1:00 PM → NOW Wed 5:30 PM · Last half hour of the workday". | "The card shows both times and one trade-off." | |
-| 7 | 0:33 – 0:39 | Pinch **Thu 1:00 PM** instead. The preview moves. | "I change my mind. Nothing I approved has moved." | |
-| 8 | 0:39 – 0:48 | Look down. Pinch and hold: the amber ring fills, labelled "HOLD TO APPROVE · Thu 1:00 PM". A chime. | "One continuous hold approves exactly this card. Let go early, lose tracking, or get a new conflict, and it cancels." | One hold · the exact card shown |
-| 9 | 0:48 – 0:56 | "Sending in 5 s · pinch to Unsend", then the receipt: "Blocked the old one (Tue 1:00 PM)". | "Five seconds to take it back." | |
-| 10 | 0:56 – 1:03 | The wall: Thursday in gold. The outbox: "✓ Thu 19 Nov, 1:00 PM" and "✕ REPLACED · Tue 17 Nov, 1:00 PM". | "The old invite stays as history, blocked for good." | |
-| 11 | 1:03 – 1:12 | The start page: the old item struck out, "Email, calendar file and copy are off". The new one: **Open email draft**, **Add to my calendar**. | "The new one waits as an email draft and a calendar file, in my own apps. Agent Wall sends nothing." | Agent Wall sends nothing |
-| End | 1:12 – 1:18 | Link and one line. | (none) | professor-200629.github.io/agentwall · WebXR, hands only, Meta IWSDK · "Recorded in Meta's emulator" (or "Recorded on Quest 3" if a tester records it) |
+| 1 | 0:00 – 0:04 | Wide, from the seat: the week on the wall with Tuesday 1 PM in gold and a tick in the outbox; the receipt card on the desk. A slow push toward Tuesday. | "Yesterday my AI agent booked a call, and I approved it." | My AI agent booked a call. I approved it. |
+| 2 | 0:04 – 0:08 | The hand pinches **Try a calendar change**. A red block lands on Tuesday 1 PM; the old time is crossed out, **CONFLICT**. | "This morning my week changed. What I approved is now wrong." | Then my week changed. |
+| 3 | 0:08 – 0:14 | Wide again. The card on the desk is red, **BLOCKED**. The hand pinches **Wed 5:30 PM**: a new card lifts off Wednesday and flies down to the desk. | "Agent Wall blocks it, shows me why on my wall, and puts a new plan on my desk." | Agent Wall |
+| 4 | 0:14 – 0:19 | Push in on the card: "WAS Tue 1:00 PM → NOW Wed 5:30 PM" and the one trade-off. | "Old time, new time, and the one thing it costs." | |
+| 5 | 0:19 – 0:25 | Wide: pinch **Thu 1:00 PM**. The preview jumps to Thursday and a second card flies down. | "I can try another. Until I hold, it is only a preview." | |
+| 6 | 0:25 – 0:30 | Start the hold and let go early: the ring drains. | "Let go early, and nothing happens." | |
+| 7 | 0:30 – 0:36 | A full hold: the ring fills, the chime. | "One full hold approves exactly the card in front of me." | One hold · the exact card shown |
+| 8 | 0:36 – 0:42 | Wide wall: Thursday in gold. The outbox: "✓ Thu 19 Nov, 1:00 PM" and "✕ REPLACED · Tue 17 Nov, 1:00 PM". (Cut the 5-second countdown out when you edit.) | "The old invite stays as history, and can never go out." | |
+| 9 | 0:42 – 0:47 | Pinch the bar on top of the board, drag the week across the room, let it go near the wall: it snaps on. | "And the wall goes where I put it." | |
+| 10 | 0:47 – 0:52 | The start page, zoomed on the new item: **Open email draft**, **Add to my calendar**. | "The new invite opens in my own mail app. I press send, not the agent." | |
+| End | 0:52 – 0:58 | Wide wall, then the end card. | (none) | Agent Wall: nothing your AI agent plans leaves without your hand · professor-200629.github.io/agentwall · small: "Conflict flow run on a Quest 3 by a Meta Start mentor. This footage: Meta's emulator." |
 
-Optional opening, from the mentors' advice (16 Nov) that the first 10 seconds
-must show what the app is and that "grabbing events left and right" is what
-makes a calendar interesting: start with 3 seconds of the hand pinching the bar
-on top of the board, dragging the week across the room and letting it snap onto
-the wall. Then shot 1. (The script does not play this yet; record it by hand in
-the emulator, or ask a tester.)
-
-Optional shot 7b (adds about 9 s, `AI=1` in the script): pinch 🎤 and say
-**"Could we push it past three o'clock?"**. The bar answers "LIVE AI understood
-'only after 3 PM' · now Wed 5:30 PM and Thu 3:30 PM". Use it only if it is
-recorded live on a headset or with a real microphone; the script's version uses
-a canned answer and must then be captioned "simulated answer". Voice-over: "A
-spoken limit changes the search. The AI never approves anything."
+Optional shot (adds about 8 s, `AI=1` in the script), after shot 5: pinch 🎤 and
+say **"Could we push it past three o'clock?"**. The bar answers "LIVE AI
+understood 'only after 3 PM'". Use it only if it is recorded live on a headset
+or with a real microphone; the script's version uses a canned answer and must
+then be captioned "simulated answer". Voice-over: "A spoken limit changes the
+search. The AI never approves anything."
 
 ### What the video must not claim
 
 - The conflict flow was run on a Quest 3 by a Meta mentor on 16 Nov (README,
   "Status"). You may say that. Do not say the grab bars or the card's new place
   were tested on a headset unless someone has done it by then, and do not quote
-  a frame rate: nobody measured one.
+  a frame rate: nobody measured one on a Quest.
 - Not "sends the invite". It never does.
-- The busy block is an example: the caption in shots 2 and 3 stays.
+- The busy block is an example and the week is a sample: the corner label says
+  so for the whole video.
 
 ---
 
 ## 2. Devpost text
 
-**Tagline (137 characters; the form allows 140)**
+**Tagline (the form allows 140 characters)**
 
-> Your week on your real wall, the decision on your desk. When an approved time stops fitting, try another in the room and hold to approve.
+> An AI agent plans your week on your real wall. When a time you approved stops fitting, it is blocked, and nothing leaves until you hold.
 
 **Inspiration**
 
-An assistant that books a meeting is easy to build and hard to trust, because
-the week keeps changing after you say yes. On a screen a changed plan is one
+An AI agent that books a meeting is easy to build and hard to trust, because
+your week keeps changing after you say yes. On a screen a changed plan is one
 more notification. I wanted to see it: the time I approved, what took it, and
 what I could do instead, all at once. A wall is big enough to show a week as
 evidence. A desk is where you sign things.
 
 **What it does**
 
-Agent Wall is a hands-only mixed reality page for Meta Quest. Your week is on
-your real wall; the one card that needs you is on your real desk (or in front
-of your seat when the headset knows no table). When a newer calendar overlaps a
-time you already approved:
+Agent Wall is a hands-only mixed reality app for Meta Quest. The agent plans on
+your real wall; the one card that needs you lands on your real desk. When a
+time you approved stops fitting:
 
-1. **The wall shows the change.** The old time stays where it was, crossed out
-   and labelled CONFLICT, beside the block that took it, with the reason ("Tue
-   1:00 PM overlaps a new busy block"). On your own calendar it adds "Guest
-   availability unknown". The old invite is blocked at that moment: no email
-   draft, no calendar file, no copy.
-2. **You try a replacement in the room.** Two large targets offer other times.
-   Pinch one: a preview appears on the week while the old conflict stays, and a
-   card flies to your desk with both times and one computed trade-off ("Leaves
-   30 minutes before Sam's next event"). Switching or cancelling changes nothing
-   you approved.
+1. **The wall blocks it and shows why.** The old time stays where it was,
+   crossed out and labelled CONFLICT, beside the block that took it. Its email
+   draft and calendar file are withdrawn at that moment.
+2. **You try a replacement in the room.** Pinch one of two large times: a
+   preview appears on the week, and a card flies to your desk with the old
+   time, the new time and one computed trade-off. Switching or cancelling
+   changes nothing you approved.
 3. **You hold to approve.** One continuous pinch-and-hold approves the exact
-   card shown. Letting go early, losing hand tracking, a new conflict or a new
-   plan cancels it. The old item stays in the outbox as history, replaced.
+   card in front of you. Let go early, lose hand tracking or get a new
+   conflict, and it cancels. The old invite stays as history, replaced.
 
-You can say a limit ("Could we push it past three o'clock?"). The live AI only
-turns the sentence into a limit; code decides what is free, what collides and
-what may be handed off, and the board says whether LIVE AI or RULES understood
-you. Approved items wait as an email draft and a calendar file for your own
-apps. Agent Wall sends nothing.
+You can also say a limit ("Could we push it past three o'clock?"). A language
+model only turns the sentence into a search limit; code decides what is free
+and what may leave. Nothing leaves without your hold: an approved invite waits
+as an email draft and a calendar file, and the last click is yours, in your own
+mail app.
 
-It runs out of the box on a labelled sample week with a labelled example change:
-no account, no key. Your own calendar (an `.ics` file or a private iCal link)
-goes through the same check.
+It runs at once on a labelled sample week. Your own calendar (an `.ics` file or
+a private iCal link) goes through the same check.
 
 **How I built it**
 
 WebXR with Meta's Immersive Web SDK 1.0.1, TypeScript and Vite, on GitHub Pages.
-Planes from Space Setup place the board on a wall and the card on a table. All
-decisions are plain TypeScript with 301 unit tests; panels are canvas textures,
-one draw call each. A small Cloudflare Worker keeps the Groq key off the page.
+Planes from Space Setup put the board on a wall and the card on a table. Every
+decision is plain TypeScript with 332 unit tests. Each panel is one draw call
+and one canvas texture, redrawn only when its content changes. A small
+Cloudflare Worker keeps the model key off the page.
 
 **Hand interactions**
 
-One hand ray. A pinch selects; a one-second hold commits. The review's targets
-are about 22 x 9 cm with pads that meet halfway, so a wobbling ray still lands
-on one. The board and the card each have a grab bar, like a Quest window: pinch
-it and move your hand, push away to send it far, and the board snaps onto a wall
-you let it go near. An open palm toward your face brings the board to you. Hands
-stay in the lap; nothing asks you to reach for the wall.
+One hand ray. A pinch selects; a one-second hold commits; both work with the
+hand resting in your lap. The board and the card each have a grab bar, like a
+Quest window: pinch it, move your hand, and the board snaps onto a wall you let
+it go near.
 
-**What is tested, and what is not**
+**On a real Quest 3**
 
-Two people have run it on a real headset. A Quest owner on the Meta forum
-tested earlier builds: wall placement, Move board, recenter, the hold ring and
-chime, the palm gesture. A Meta Start mentor ran the conflict review on a Quest 3
-in a live mentor session and said it worked well, the hand tracking "works
-perfectly" and it "felt really smooth". He asked for two changes (the card
-farther away; grab and move the calendar), which I made that evening. Those two
-have run in Meta's emulator only (22 checks with real emulated pinches). No
-frame rate was measured on a Quest.
+A Meta Start mentor ran the conflict review live in a mentor session on 16 Nov:
+the hand tracking "works perfectly" and it "felt really smooth". He asked for a
+card farther from the eyes and a calendar he could grab and move. Both shipped
+that evening and pass 22 scripted hand-pinch checks in Meta's emulator; they
+have not been on a headset yet. An independent Quest owner had earlier
+confirmed wall placement, recentering, the hold ring and the palm gesture.
 
 **What is next**
 
-A headset pass with frame times; the other person's free/busy through a
-consented calendar connection; and the same review for anything an agent did
-for you, not only meetings.
+The other person's free/busy through a consented calendar connection; the same
+review for anything an agent did for you, not only meetings; and a headset pass
+with frame times.
 
 **Target launch:** (yours to fill in; see the note below)
 
@@ -171,7 +178,9 @@ form takes free text.
 
 ## 3. Before you submit
 
-- [ ] The branch is merged and the Pages build shows its build id on the board.
+- [ ] The Pages build shows its build id on the board, and it is the build the
+      video was recorded on.
 - [ ] The video is public on YouTube or Vimeo and under three minutes.
-- [ ] The video's end card and the Devpost text say the same thing about testing.
+- [ ] The video's corner label, its end card and the Devpost text say the same
+      thing about testing.
 - [ ] The link in the form opens in Quest Browser without a login.

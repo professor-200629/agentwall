@@ -20,7 +20,11 @@ export const EXAMPLE = {
   mark: '(example change)',
   /** The new block lasts an hour from the approved start (cut at the end of the workday). */
   minutes: 60,
-  maxBlocks: 6,
+  /**
+   * How many example blocks stay on the week. Older ones leave it when a new one is added:
+   * with six, the sixth change left no free time at all, and no way out inside the headset.
+   */
+  maxBlocks: 3,
 };
 
 const STAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/;
@@ -43,9 +47,9 @@ export function cleanExample(raw: unknown): BusyBlock[] {
     if (typeof start !== 'string' || typeof end !== 'string' || !STAMP.test(start) || !STAMP.test(end) || start >= end) continue;
     if (out.some((o) => o.start === start && o.end === end)) continue;
     out.push({ start, end, title: EXAMPLE.title });
-    if (out.length >= EXAMPLE.maxBlocks) break;
   }
-  return out;
+  // The newest ones are kept: they are the ones behind the conflict on the wall now.
+  return out.slice(-EXAMPLE.maxBlocks);
 }
 
 /** The week with the example blocks on your side. Your own calendar never gets them. */

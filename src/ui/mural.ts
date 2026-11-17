@@ -212,7 +212,9 @@ export function drawMural(c: CanvasRenderingContext2D, w: number, h: number, v: 
       if (tall) c.fillText(tag, x0 + 7, y0 + 34);
       else c.fillText(tag, x0 + bw - tagW, y0 + Math.min((y1 - y0) / 2, 15));
     }
-    if (i < scanned && !isFresh) {
+    // The red strike is the agent ruling a block out during its sweep. In a conflict review red
+    // belongs to the conflict alone (as amber belongs to the decision), so the strikes are not drawn.
+    if (i < scanned && !isFresh && !rv) {
       c.strokeStyle = STRIKE;
       c.lineWidth = 3;
       c.beginPath();

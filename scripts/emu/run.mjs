@@ -147,6 +147,13 @@ check('still holding does not approve a second time', hook('outbox').length === 
 pinchValue(0);
 await sleep(300);
 check('ring hidden after release', hook('interaction').hold === 0);
+// The agent's next-step card may be up by now, and it lies over part of that pill. The card stops
+// the ray (a pinch on it must not reach what is behind it), so it is answered first. The agent
+// offers two next steps in a row (a prep block, then a reminder): both are answered.
+for (let i = 0; i < 3 && hook('flow').card; i++) {
+  await tap('replan:no');
+  await sleep(900);
+}
 await tap('alt0');
 plan = hook('plan');
 check('a change after approval resets the invite to "needs approval"', plan.approval === 'needs' && plan.linked, plan.slot?.id);
@@ -155,15 +162,18 @@ check('a change after approval resets the invite to "needs approval"', plan.appr
 const aiAnswer = {
   intent: 'rule',
   rule: { after: null, before: null, day: null, notDays: ['2026-11-18'] },
-  slotId: '2026-11-19T16:30',
-  reason: 'Thursday 4:30 PM avoids Wednesday and leaves Sam a gap after class.',
-  body: 'Hi Sam,\n\nHow about Thursday 19 Nov, 4:30 – 5:00 PM IST to go through your app test notes?\n\nThanks,\nBalu',
+  // Thu 4:00 PM was approved above and still stands: it is busy time for the agent now (with the
+  // usual gap after it), so the model's pick here is the next free time, 5:00 PM.
+  slotId: '2026-11-19T17:00',
+  reason: 'Thursday 5:00 PM avoids Wednesday and the call you already approved.',
+  body: 'Hi Sam,\n\nHow about Thursday 19 Nov, 5:00 – 5:30 PM IST to go through your app test notes?\n\nThanks,\nBalu',
 };
 hook('fakeAi', aiAnswer, 300);
 await tap('chip:notwed');
 await waitIdle();
 plan = hook('plan');
-check('AI answer used: Thu 4:30 PM, AI-written email', plan?.by === 'ai' && plan.slot?.id === '2026-11-19T16:30' && plan.invite.source === 'ai' && plan.invite.body === aiAnswer.body, `${plan?.slot?.id} ${plan?.invite?.source}`);
+check('AI answer used: Thu 5:00 PM, AI-written email', plan?.by === 'ai' && plan.slot?.id === '2026-11-19T17:00' && plan.invite.source === 'ai' && plan.invite.body === aiAnswer.body, `${plan?.slot?.id} ${plan?.invite?.source}`);
+check('the agent does not plan over the call approved above (Thu 4:00 PM is busy time now)', hook('outbox').some((o) => o.slotId === '2026-11-19T16:00' && !o.blocked) && hook('weekCells').some((c) => c.day === '2026-11-19' && c.start === 16 * 60 && c.kind === 'busy' && /approved/.test(c.reason)), JSON.stringify(hook('outbox').map((o) => o.slotId)));
 check('board credits the AI', /Planned by AI/.test(hook('interaction').agentLine), hook('interaction').agentLine);
 
 hook('fakeAi', { ...aiAnswer, intent: 'clear', rule: { after: null, before: null, day: null, notDays: [] }, slotId: '2026-11-17T13:00', body: 'Hi Sam, Friday 9 AM?' }, 6000);
@@ -196,10 +206,10 @@ await waitIdle();
 await hook('heard', 'can we do it on Thursday after 4');
 await waitIdle();
 plan = hook('plan');
-check('voice transcript "Thursday after 4" -> Thu 4:00 PM, and the board shows what it heard', plan?.slot?.id === '2026-11-19T16:00' && /Heard: “can we do it on Thursday after 4”/.test(hook('interaction').agentLine), `${plan?.slot?.id} | ${hook('interaction').agentLine}`);
+check('voice transcript "Thursday after 4" -> Thu 5:00 PM (4:00 PM is your approved call), and the board shows what it heard', plan?.slot?.id === '2026-11-19T17:00' && /Heard: “can we do it on Thursday after 4”/.test(hook('interaction').agentLine), `${plan?.slot?.id} | ${hook('interaction').agentLine}`);
 await hook('heard', 'what is the weather');
 await waitIdle();
-check('voice gibberish leaves the plan alone and says so', hook('plan').slot?.id === '2026-11-19T16:00' && /not sure/i.test(hook('interaction').agentLine), hook('interaction').agentLine);
+check('voice gibberish leaves the plan alone and says so', hook('plan').slot?.id === '2026-11-19T17:00' && /not sure/i.test(hook('interaction').agentLine), hook('interaction').agentLine);
 
 // ---------- 7. Saved board survives a reload ----------
 aim('invite');

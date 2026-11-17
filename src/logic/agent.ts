@@ -213,15 +213,20 @@ export function planFromAi(
   if (!aiSlot && allowed.length > 0) notes.push('AI slot did not fit the rule; rules picked the time');
   const bodyOk = slot !== undefined && aiSlot !== undefined && bodyMatchesSlot(answer.body, slot, cal);
   if (slot && !bodyOk) notes.push('rules wrote the email');
+  // "By AI" only when something the model supplied is in the plan: its time, or its reading of a
+  // sentence the rules could not read. When its time was thrown out and the rules read the words,
+  // the rules made this plan, and the board and the receipt say so.
+  const readByAi = !known && !sameRule(constraint, current?.constraint ?? {});
+  const by = aiSlot || readByAi ? 'ai' : 'rules';
   const plan = makePlan(cal, constraint, ruleText(constraint), current ?? undefined, {
     slot,
     reason: aiSlot && answer.reason ? answer.reason : undefined,
     // The AI's email is written for the sample call. On your own calendar the template (your topic) is used.
     body: bodyOk && cal.source !== 'yours' ? answer.body : undefined,
-    by: 'ai',
+    by,
     note: notes.join('; '),
   });
-  return { plan, by: 'ai', note: plan.note };
+  return { plan, by, note: plan.note };
 }
 
 export type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
@@ -296,6 +301,11 @@ export async function runAgent(
   // The focus task has no email to write, so the rules plan it (fast, always works).
   const focus = focusRequest(cal, text, current);
   if (focus) return focus;
+  // A focus block or a meeting being moved is on the desk, and the rules cannot read the sentence.
+  // The model only plans calls: asking it would swap what is on the desk for a call invite.
+  if ((isFocus(current) || current?.moving) && parseRequest(text, cal).intent === 'unknown') {
+    return { plan: null, by: 'rules', note: 'Not sure what you meant.' };
+  }
   if (!opts.url) return planWithRules(cal, text, current, 'AI not set up; rules planned this');
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? AI_TIMEOUT_MS);

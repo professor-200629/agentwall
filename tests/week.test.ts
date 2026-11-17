@@ -93,9 +93,18 @@ describe('chooseDesk: the invite goes to your real table, or your lap', () => {
     expect(d.planeId).toBe(7);
     expect(d.position.x).toBeCloseTo(0);
     expect(d.position.z).toBeCloseTo(-0.6); // the table's centre: as far as this small table allows
-    expect(d.position.y).toBeCloseTo(0.75 + DESK.lift);
     expect(d.yaw).toBeCloseTo(0);
     expect(d.tilt).toBeGreaterThan(0);
+    // It rests on the table: the bottom of its grab bar is just above the top, never below it.
+    const down = Math.cos(d.tilt) * d.scale; // one metre of the card's own height, as height in the room
+    const barBottom = d.position.y - DESK.belowCentre * down;
+    expect(barBottom).toBeGreaterThanOrEqual(0.75);
+    expect(barBottom).toBeLessThan(0.75 + 0.03);
+    expect(d.position.y - 0.26 * down).toBeGreaterThan(0.75 + 0.04); // the card's own lower edge
+    // Leaning well back, its top edge is no more than 22 cm above the table (it was 20 cm when it stood in the table).
+    expect(d.tilt).toBe(DESK.tilt);
+    expect(d.tilt).toBeLessThanOrEqual(DESK.maxTilt);
+    expect(d.position.y + 0.26 * down).toBeLessThan(0.75 + 0.22);
     // A deep desk: the card sits 65 cm ahead, not at the edge and not at the far centre.
     const deep = chooseDesk(head, fwd, [
       table({ position: { x: 0, y: 0.75, z: -1.0 }, polygon: [{ x: -0.8, z: -0.8 }, { x: 0.8, z: -0.8 }, { x: 0.8, z: 0.8 }, { x: -0.8, z: 0.8 }] }),

@@ -2,13 +2,14 @@ import { describe, expect, it } from 'vitest';
 import ICAL from 'ical.js';
 import calendarJson from '../src/data/sample-calendar.json';
 import { buildPayload, understandRule, type FetchLike } from '../src/logic/agent.js';
+import { withApproved } from '../src/logic/approved.js';
 import { cleanExample, EXAMPLE, exampleApproval, exampleBlock, isExampleBlock, withExample } from '../src/logic/example-change.js';
 import { makeFocusPlan } from '../src/logic/focus.js';
 import { asText, eventIcs, mailtoLink, slotInstant } from '../src/logic/handoff.js';
 import { HoldToApprove } from '../src/logic/hold.js';
 import { reminderItem } from '../src/logic/next-step.js';
-import { addToOutbox, approve, buildReceipt, makePlan, reviewedMark, type OutboxItem, type Plan } from '../src/logic/plan.js';
-import { parseRequest } from '../src/logic/request.js';
+import { addToOutbox, approve, buildReceipt, freshId, makePlan, reviewedMark, type OutboxItem, type Plan } from '../src/logic/plan.js';
+import { parseRequest, ruleText } from '../src/logic/request.js';
 import {
   candidates,
   checkHandOff,
@@ -310,6 +311,65 @@ describe('repeated refresh, no alternative, a draft', () => {
     expect(candidates(B(plan.slot!), 'call', plan.slot!, { day: TUE })).toEqual([]);
   });
 
+  it('your own approved call, read back from your calendar with its title cut short, is not a conflict with itself', () => {
+    // A calendar that is read keeps titles to 28 characters: "Call about the Q3 budget re…".
+    const yours: CalendarData = { ...A, source: 'yours', topic: 'the Q3 budget review', busy: { owner: [], guest: [] } };
+    const plan = makePlan(yours);
+    const item = sent(plan, yours);
+    expect(item.subject.startsWith('Call about the Q3 budget review: ')).toBe(true);
+    const stamp = (min: number) => `${plan.slot!.day}T${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`;
+    const back = (title: string): CalendarData => ({ ...yours, busy: { owner: [{ start: stamp(plan.slot!.start), end: stamp(plan.slot!.end), title }], guest: [] } });
+    expect(overlapsOf(back('Call about the Q3 budget review'), plan.slot!, item)).toEqual([]);
+    expect(overlapsOf(back('Call about the Q3 budget re…'), plan.slot!, item)).toEqual([]);
+    expect(revalidate([item], back('Call about the Q3 budget re…'), AT).newly).toEqual([]);
+    // Another meeting at that time is still a conflict, also one whose cut title merely starts alike.
+    expect(overlapsOf(back('Dentist'), plan.slot!, item)).toHaveLength(1);
+    expect(overlapsOf(back('Call…'), plan.slot!, item)).toHaveLength(1);
+    expect(revalidate([item], back('Call about the Q4 forecast …'), AT).newly).toEqual([item.id]);
+  });
+
+  it('a limit with no room left: the review looks in the whole week and says which limit it dropped', () => {
+    // "Only on Tuesday" has one free time in the sample week. The example change takes it.
+    const plan = makePlan(A, { day: TUE }, 'only on Tuesday');
+    expect(plan.slot?.id).toBe(`${TUE}T13:00`);
+    const item = sent(plan);
+    expect(item.rule).toEqual({ day: TUE });
+    const calB = B(plan.slot!);
+    const box = revalidate([item], calB, AT).outbox;
+    expect(candidates(calB, 'call', plan.slot!, { day: TUE })).toEqual([]);
+    // Other days are free, so "no other time fits this week" would be false, and a dead end.
+    const rv = startReview(calB, { item: box[0] })!;
+    expect(rv.candidates).toHaveLength(2);
+    expect(rv.candidates.every((c) => c.slot.day !== TUE)).toBe(true);
+    expect(rv.rule).toEqual({});
+    expect(rv.widened).toBe(ruleText({ day: TUE }));
+    expect(rv.widened).toMatch(/Tue/);
+    // The same for a draft that was never approved.
+    expect(startReview(calB, { draft: plan })).toMatchObject({ itemId: null, rule: {}, widened: rv.widened });
+    // The calendar changes again during the review: still the whole week, still said.
+    const again = refreshReview(B(rv.candidates[0].slot, calB), rv);
+    expect(again.widened).toBe(rv.widened);
+    expect(again.candidates.length).toBeGreaterThan(0);
+    expect(again.candidates.some((c) => c.slot.id === rv.candidates[0].slot.id)).toBe(false);
+    // A limit you say during the review is kept as you said it, even when nothing fits it.
+    const said = refreshReview(calB, rv, { day: TUE });
+    expect(said).toMatchObject({ rule: { day: TUE }, candidates: [] });
+    expect(said.widened).toBeUndefined();
+    // A limit that still has room is kept, and nothing is said.
+    const thu = makePlan(A, { day: THU }, 'only on Thursday');
+    const rvThu = startReview(B(thu.slot!), { item: revalidate([sent(thu)], B(thu.slot!), AT).outbox[0] })!;
+    expect(rvThu.rule).toEqual({ day: THU });
+    expect(rvThu.widened).toBeUndefined();
+    expect(rvThu.candidates.length).toBeGreaterThan(0);
+    expect(rvThu.candidates.every((c) => c.slot.day === THU)).toBe(true);
+    // No limit at all, or nothing free anywhere: nothing is widened and nothing is pretended.
+    expect(startReview(B(makePlan(A).slot!), { draft: makePlan(A) })!.widened).toBeUndefined();
+    const full: BusyBlock[] = A.days.map((d) => ({ start: `${d}T09:00`, end: `${d}T18:00`, title: 'All day' }));
+    const none = startReview({ ...A, busy: { owner: full, guest: [] } }, { draft: plan })!;
+    expect(none).toMatchObject({ rule: { day: TUE }, candidates: [] });
+    expect(none.widened).toBeUndefined();
+  });
+
   it('a draft whose time is taken (during the hold or the Unsend window) is reviewed the same way', () => {
     const draft = makePlan(A);
     const calB = B(draft.slot!);
@@ -430,6 +490,56 @@ describe('older saved records', () => {
     // An example block read back is always labelled as one, whatever the file said.
     expect(back.example).toEqual([{ start: `${TUE}T13:00`, end: `${TUE}T14:00`, title: EXAMPLE.title }]);
     expect(cleanExample('x')).toEqual([]);
+    // Only the newest few are kept (a board saved by an older build may hold more).
+    const many = [9, 10, 11, 12, 13, 14].map((h) => ({ start: `${TUE}T${String(h).padStart(2, '0')}:00`, end: `${TUE}T${String(h).padStart(2, '0')}:30` }));
+    expect(EXAMPLE.maxBlocks).toBe(3);
+    expect(cleanExample(many).map((b) => b.start)).toEqual([`${TUE}T12:00`, `${TUE}T13:00`, `${TUE}T14:00`]);
+  });
+
+  it('the example can be tried again and again: the sample week never runs out of other times', () => {
+    // Every round: the example takes the approved time, you replace it, and that goes out.
+    let blocks: BusyBlock[] = [];
+    let item = sent(makePlan(A));
+    let box = [item];
+    for (let round = 1; round <= 24; round++) {
+      const slot = itemSlot(item)!;
+      blocks = [...blocks, exampleBlock(A, slot)].slice(-EXAMPLE.maxBlocks);
+      const cal = withExample(A, blocks);
+      box = revalidate(box, cal, AT).outbox;
+      expect(box.find((o) => o.id === item.id)?.blocked?.why, `round ${round}`).toBe('conflict');
+      const found = candidates(withApproved(cal, box), 'call', slot);
+      expect(found.length, `round ${round}`).toBeGreaterThan(0);
+      const pick = found[round % found.length].slot;
+      const made = approve(trial(cal, pick, item.id), AT, { source: 'sample' })!.item;
+      // A time comes round again once its example block has left the week: its id must be new.
+      const next = { ...made, id: freshId(box, made.id), status: 'sent' as const };
+      box = revalidate(addToOutbox(box, next), cal, AT).outbox;
+      expect(box.find((o) => o.id === next.id)?.blocked, `round ${round}`).toBeUndefined();
+      item = next;
+    }
+  });
+
+  it('an id is used once: a new approval never inherits an older item\'s history', () => {
+    const plan = makePlan(A);
+    const old = sent(plan);
+    const calB = B(plan.slot!);
+    const repl = { ...approve(trial(calB, candidates(calB, 'call', plan.slot!)[0].slot, old.id), AT, { source: 'sample' })!.item, status: 'sent' as const };
+    const box = revalidate(addToOutbox(revalidate([old], calB, AT).outbox, repl), calB, AT).outbox;
+    expect(box.find((o) => o.id === old.id)?.blocked?.why).toBe('superseded');
+    // Later the same time is free again, and a plan made from scratch has version 1 again: the same id.
+    const again = approve(makePlan(A), AT, { source: 'sample' })!.item;
+    expect(again.id).toBe(old.id);
+    // Used as it is, the new approval would at once read "replaced".
+    expect(revalidate(addToOutbox(box, { ...again, status: 'sent' }), A, AT).outbox.find((o) => o.id === again.id)?.blocked?.why).toBe('superseded');
+    const id = freshId(box, again.id);
+    expect(id).toBe(`${old.id}.2`);
+    const fresh = revalidate(addToOutbox(box, { ...again, id, status: 'sent' }), A, AT).outbox;
+    expect(fresh.find((o) => o.id === id)?.blocked).toBeUndefined();
+    expect(fresh.find((o) => o.id === old.id)?.blocked?.why).toBe('superseded'); // the history is still there
+    // The id stays taken while any item names it, also after the old item itself has left the list.
+    expect(freshId([repl], old.id)).toBe(`${old.id}.2`);
+    expect(freshId([], old.id)).toBe(old.id);
+    expect(freshId(fresh, again.id)).toBe(`${old.id}.3`);
   });
 
   it('a moved meeting does not collide with its own old time', () => {

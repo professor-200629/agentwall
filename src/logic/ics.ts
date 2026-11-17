@@ -64,6 +64,16 @@ export function busyFromIcs(
   days: string[],
   toLocal: (d: Date) => LocalTime = machineLocal,
 ): IcsResult {
+  try {
+    return readIcs(text, days, toLocal);
+  } catch {
+    // The parser took it but the reader could not walk it (two calendars in one file, a broken
+    // event): refuse it with a plain reason. A throw here left the page saying "Reading…" for good.
+    return { ok: false, error: 'This calendar file could not be read.' };
+  }
+}
+
+function readIcs(text: string, days: string[], toLocal: (d: Date) => LocalTime): IcsResult {
   if (typeof text !== 'string' || !/BEGIN:VCALENDAR/i.test(text.slice(0, 2000))) {
     return { ok: false, error: 'This is not a calendar file (no BEGIN:VCALENDAR).' };
   }

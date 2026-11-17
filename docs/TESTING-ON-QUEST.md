@@ -1,7 +1,8 @@
 # Testing Agent Wall on a Quest (10 minutes)
 
-Thank you for helping! I don't have a headset, so you are the first person to
-try this on real hardware.
+Thank you for helping! I don't have a headset, so everything built since the
+last test has only run in Meta's emulator. You are the first person to try this
+build on real hardware.
 
 **Link:** https://professor-200629.github.io/agentwall/
 

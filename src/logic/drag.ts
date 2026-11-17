@@ -48,9 +48,14 @@ const len = (a: V3) => Math.hypot(a.x, a.y, a.z);
  * @param r  that distance now (a hand pushed away from the body makes it larger)
  */
 export function pushPull(d0: number, r0: number, r: number, gain: number, min: number, max: number): number {
+  // The distance the thing is at when you pinch it is always allowed. A hand resting in the lap is
+  // closer to the card's bar than the nearest the card may be pulled to: clamping the start made the
+  // card hop away on a pinch that did not move at all.
+  const lo = Math.min(min, d0);
+  const hi = Math.max(max, d0);
   const d = d0 + (r - r0) * gain;
-  if (!Number.isFinite(d)) return Math.min(max, Math.max(min, d0));
-  return Math.min(max, Math.max(min, d));
+  if (!Number.isFinite(d)) return d0;
+  return Math.min(hi, Math.max(lo, d));
 }
 
 /** The point `dist` metres from `origin` toward `through` (or straight ahead, -Z, when they coincide). */

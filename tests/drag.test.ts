@@ -37,6 +37,19 @@ describe('grab and move: following the hand ray', () => {
     expect(pushPull(1.5, Number.NaN, 0.3, DRAG.boardGain, DRAG.boardMin, DRAG.boardMax)).toBe(1.5);
   });
 
+  it('a pinch that does not move never makes the thing hop, however near or far it already is', () => {
+    // A hand resting in the lap is about 25 cm from the card's bar: nearer than the card may be pulled to.
+    expect(pushPull(0.25, 0.4, 0.4, DRAG.cardGain, DRAG.cardMin, DRAG.cardMax)).toBe(0.25);
+    expect(pushPull(0.4, 0.4, 0.4, DRAG.boardGain, DRAG.boardMin, DRAG.boardMax)).toBe(0.4);
+    // A board left on a far wall is beyond the farthest it may be pushed to: it stays there too.
+    expect(pushPull(5.5, 0.4, 0.4, DRAG.boardGain, DRAG.boardMin, DRAG.boardMax)).toBe(5.5);
+    // From there the hand still moves it the right way, and it never comes nearer (or goes farther) than it began.
+    expect(pushPull(0.25, 0.4, 0.5, DRAG.cardGain, DRAG.cardMin, DRAG.cardMax)).toBeCloseTo(0.5);
+    expect(pushPull(0.25, 0.4, 0.3, DRAG.cardGain, DRAG.cardMin, DRAG.cardMax)).toBe(0.25);
+    expect(pushPull(5.5, 0.4, 0.3, DRAG.boardGain, DRAG.boardMin, DRAG.boardMax)).toBeCloseTo(4.9);
+    expect(pushPull(5.5, 0.4, 0.6, DRAG.boardGain, DRAG.boardMin, DRAG.boardMax)).toBe(5.5);
+  });
+
   it('the grabbed point stays on the ray at that distance', () => {
     const p = along({ x: 0.2, y: 1, z: -0.3 }, { x: 0.2, y: 1, z: -1.3 }, 2);
     expect(p).toEqual({ x: 0.2, y: 1, z: -2.3 });

@@ -1,28 +1,17 @@
 # Agent Wall
 
-Your week on your real wall, the decision on your real desk. An AI agent plans a
-task; when a time you approved stops fitting, you see why, try another time in
-the room, and approve exactly what you see. Nothing goes out until you pinch and
-hold, and Agent Wall itself sends nothing.
+An AI agent plans your week on your real wall; the one card that needs you lands
+on your real desk. When a time you approved stops fitting, the wall blocks it,
+shows why, and lets you try another time in the room. Nothing leaves without
+your pinch-and-hold, and the last click is yours, in your own mail app.
 
 Entry for the Meta VR Start Developer Competition 2026 (Productivity track).
 Built with Meta's [Immersive Web SDK](https://iwsdk.dev) (WebXR), hands only.
+It starts on a labelled sample week; your own calendar is optional.
 
-**Status: 16 Nov.** Real AI connected. Two people have run it on a real headset:
-
-- **steve40** (Meta forum, builds up to `e340f98`): wall placement, Move board
-  and recenter ("Cool, it's perfect now"), the hold ring and its chime, and the
-  palm-up gesture ("Open palm worked to reposition the board. No false
-  triggers."). He heard no agent voice; that was changed to recorded clips
-  afterwards and has not been confirmed on a headset.
-- **A Meta Start mentor, live in the "Monday Unblock" session of 16 Nov, on a
-  Quest 3** (the live site was build `8618557`; he did not read the number out):
-  the conflict review below. In the session's captions: "Yes, I see the red
-  conflict here", "it's working quite well and the hand tracking works
-  perfectly", "It felt really smooth" (an impression; no frame rate was
-  measured). He asked for two changes, both made the same evening and listed
-  under "Fixes from the mentor's Quest 3 test" below. **Those two changes have
-  run in Meta's emulator (IWER) only.**
+**On a real Quest 3:** a Meta Start mentor ran the conflict flow below live in a
+mentor session on 16 Nov: "the hand tracking works perfectly", "it felt really
+smooth". What was tested where, and what was not: [On a real headset](#on-a-real-headset).
 
 **Have a Quest? Please try
 [docs/TESTING-ON-QUEST.md](docs/TESTING-ON-QUEST.md).**
@@ -102,14 +91,35 @@ not move changes nothing, and a pinch on a bar is never an approval.
 | **One hold, and the ring says what it approves** | **The old item stays as history: REPLACED** |
 | ![Hold ring](docs/screenshots/review-3-hold.png) | ![Replaced](docs/screenshots/review-4-replaced.png) |
 
-Checked with real emulated hand pinches in Meta's emulator:
+Checked with scripted hand pinches in Meta's emulator:
 `node scripts/emu/review.mjs` (46 checks: blocking, the trial, cancel, an early
 release, hand tracking lost mid-hold, a new conflict mid-hold, the fresh hold,
 the start page before and after a reload, a second change, a spoken limit,
 reduced motion, no room data) and in `tests/review.test.ts`. The grab bars and
 the card's new place: `node scripts/emu/drag.mjs` (22 checks) and
 `tests/drag.test.ts`. The conflict review itself was then run by a Meta mentor
-on a Quest 3 (see the status above); the grab bars have not been on a headset.
+on a Quest 3 (see below); the grab bars have not been on a headset.
+
+## On a real headset
+
+Two people have run it on a real headset.
+
+- **steve40** (Meta forum, builds up to `e340f98`): wall placement, Move board
+  and recenter ("Cool, it's perfect now"), the hold ring and its chime, and the
+  palm-up gesture ("Open palm worked to reposition the board. No false
+  triggers."). He heard no agent voice; that was changed to recorded clips
+  afterwards and has not been confirmed on a headset.
+- **A Meta Start mentor, live in the "Monday Unblock" session of 16 Nov, on a
+  Quest 3** (the live site was build `8618557`; he did not read the number out):
+  the conflict review above. In the session's captions: "Yes, I see the red
+  conflict here", "it's working quite well and the hand tracking works
+  perfectly", "It felt really smooth" (an impression; no frame rate was
+  measured). He asked for two changes, both shipped the same evening and listed
+  under "Fixes from the mentor's Quest 3 test" below.
+
+Everything built after those two tests (the card's new place, the grab bars, and
+the fixes of 17 Nov below) has run in Meta's emulator (IWER) with scripted hand
+pinches, not on a headset.
 
 ## Everything else it does
 
@@ -211,7 +221,7 @@ its zone (IST); your own calendar uses the wall clock of the machine that
 approved. Items saved before 16 Nov keep the wall-clock time they were saved with.
 
 Items 8 to 11 were added on 16 Nov and are checked in Meta's emulator only
-(`node scripts/emu/new-features.mjs`, 25 checks), not yet on a headset. Look
+(`node scripts/emu/new-features.mjs`, 19 checks), not yet on a headset. Look
 and pinch needs the emulator's Meta VR Glasses device (set `dev.emulator.device`
 to `metaVRGlasses` in `iwsdk.config.json`); with the Quest 3 device that part is
 skipped. The emulator reports the same wide view (115 x 90 degrees) for both
@@ -225,8 +235,8 @@ Screenshots from Meta's Quest 3 emulator (IWER), not a real headset:
 | ![Agent sweeping the week](docs/screenshots/wall-agent-sweeping.png) | ![Week mural](docs/screenshots/wall-week-mural.png) |
 | **Invite on the real table: hold to approve** | **5 s to Unsend** |
 | ![Needs approval](docs/screenshots/desk-1-needs-approval.png) | ![Unsend window](docs/screenshots/desk-2-unsend-window.png) |
-| **Receipt: RULES / YOU / DEMO** | **Agent keeps watch: conflict + Re-plan?** |
-| ![Receipt](docs/screenshots/desk-3-receipt.png) | ![Re-plan](docs/screenshots/desk-4-replan.png) |
+| **Receipt: RULES / YOU / DEMO** | |
+| ![Receipt](docs/screenshots/desk-3-receipt.png) | |
 | **Point at a rule: pinch to remove it** | **Point at any free time: pinch to pick it** |
 | ![Remove a rule](docs/screenshots/wall-touch-remove-rule.png) | ![Pick a time](docs/screenshots/wall-touch-pick-time.png) |
 | **Next session, another seat: same spot** | **Move board button, cursor anywhere on the board** |
@@ -262,7 +272,8 @@ Open the GitHub Pages link in the **Meta Quest Browser** and press
 **Enter mixed reality**. Allow spatial data when asked. Quest uses the walls from
 your Space Setup; without one, the board floats in front of you.
 
-On a desktop browser you only see a 2D preview of the board.
+No headset? The same flow works with a mouse in a desktop browser: click a chip,
+and hold the mouse on the card for one second.
 
 ## Develop
 
@@ -271,7 +282,7 @@ Needs Node 20.19+, 22.12+ or 24.
 ```bash
 npm install
 npm run dev          # dev server + Meta Quest 3 emulator (IWER) in a managed browser
-npm test             # 301 unit tests (Vitest): placement, scheduler, agent checks, week, desk, receipt, conflict review
+npm test             # unit tests (Vitest): placement, scheduler, agent checks, week, desk, receipt, conflict review
 npm run typecheck
 npm run build        # static site in dist/
 ```
@@ -282,10 +293,13 @@ Emulator checks (dev server must be running headless):
 npx iwsdk dev up --headless --allow-browser-automation
 node scripts/emu/review.mjs         # the conflict review, start to end (46 checks)
 node scripts/emu/drag.mjs           # grab bars for the board and the card, the card's distance (22 checks)
-node scripts/emu/run.mjs            # placement, asking, approving, the desk (93 checks)
+node scripts/emu/run.mjs            # placement, asking, approving, the desk (94 checks)
 node scripts/emu/new-features.mjs   # queue, learned rule, view fit, look + pinch (19 checks)
 node scripts/emu/real-calendar.mjs  # your own calendar, a newer file, a failed re-read (26 checks)
 node scripts/emu/move.mjs           # move a meeting (13 checks)
+# The fixes of 17 Nov, one script each (widen 16, approved 17, interaction 15, card 5, table 4 checks):
+node scripts/emu/fixes-17nov/widen.mjs
+node scripts/emu/monkey.mjs 11 90   # random pinches, holds, drags and reloads (seed, steps), rules checked after every step
 npx iwsdk dev down
 ```
 
@@ -317,6 +331,46 @@ checked on purpose only: `npx vitest run --config vitest.live.config.ts`.
   checked on a Quest: Space Setup reports the same wall sizes every session.
 - `src/board-system.ts`: the IWSDK system that feeds detected planes and the
   head pose into that logic and moves the board.
+
+## Fixes from an outside review (17 Nov)
+
+On 17 Nov the build was read by three independent reviewers (two looking for
+defects, one reading the entry as a judge would) and driven by a script that
+pinches, holds, drags and reloads in a random order. What they found and what
+changed:
+
+| Found | Now |
+| --- | --- |
+| After you approved a call, asking again offered the same time; a second hold left two invites for one time. A call could land on an approved focus block. | What you approved is busy time for the agent (`src/logic/approved.ts`), it is drawn on the week as your own block, and the hold refuses a time another approval holds. |
+| With a limit such as "Thursday", a blocked invite said "no other time fits this week" while other days were free, with nothing to pinch. | When the item's own limit has no room left, the review looks in the whole week and says which limit it dropped. |
+| The sixth "Try a calendar change" in a row left no free time at all, and no way out inside the headset. | The week keeps the three newest example blocks; older ones leave it. |
+| A pinch on the card's grab bar from a hand closer than 35 cm made the card hop away. | The distance a thing is at when you pinch it is always allowed. |
+| After "Not now" the blocked time was still drawn as the agent's gold pick, and could come back as an "also free" pill. | A blocked card's time is neither. |
+| A pinch that missed a button on the agent's card went through the card to the week behind it. | The card stops the ray. |
+| A hand that travelled while pinching the card (trying to move it) filled the ring and approved. | A hold is a still hand: more than 8 cm of travel cancels it and says to use the bar. |
+| "Review conflict" pinched inside another card's Unsend window let the pending send land on the wrong item. | No review is opened over a card that is still sending. |
+| The board credited the AI when the rules had picked the time and written the email. | "By AI" only when something the model supplied is in the plan. |
+| A spoken sentence the rules could not read swapped a focus block on the desk for a call invite. | With a focus block or a move on the desk the model is not asked. |
+| A new approval for a time that came round again could inherit an older item's "replaced" mark. | An id is used once. |
+| On the start page two buttons that should be hidden were shown (one clears the board), and "Enter mixed reality" did nothing while the app was still loading. | Hidden; the button says "Loading…" until it works, and a failed start says so. |
+| Your own calendar: a file with two calendars in it left "Reading…" for good; your own approved call, read back with its title cut short, was a conflict with itself. | Refused with a reason; recognised as its own. |
+| In a conflict review every busy block carried the red strike of the agent's sweep. | In a review red is for the conflict only. |
+| On a real table the card's lower 8 cm and its whole grab bar were drawn below the table top (since the card was made larger on 16 Nov). | The card rests on the table, its bar just above the top, and leans further back so its upper edge is no higher than before. |
+
+Known and not changed before the deadline:
+
+- **Your own calendar, repeating events.** One moved occurrence can hide the
+  later occurrences of that series, and a daily event that began more than about
+  ten years ago is not read. Both show busy time as free. The sample week is not
+  affected.
+- **Your own calendar from a file** is not read again by itself: after a week
+  the right-hand days have no data.
+- **Two hands.** A pinch or a loss of tracking of the other hand also ends this
+  hand's drag or hold. Nothing is approved by it; you hold or drag again.
+- **A real table.** The card's place on a detected table was checked on the
+  emulator room's table only; nobody has seen it on a headset.
+- "Open email draft" needs a mail app; a headset has none, so the page says to
+  use "Copy text" there.
 
 ## Fixes from the mentor's Quest 3 test (16 Nov)
 
@@ -452,7 +506,7 @@ clears it (a unit test checks the geometry).
 - `src/ui/mural.ts`: draws the week on one canvas texture; the sweep animates
   over 1.8 s, then the gold pick and the runner-ups appear.
 
-## The AI, and why the demo never breaks
+## The AI's one job, and the fallback when it fails
 
 The AI has one narrow job: turn what you said ("only after 4 PM") plus the
 sample calendar into a slot choice and an email. It runs on Groq
@@ -465,7 +519,9 @@ API key never ships in the app.
   is replaced, an email that names the wrong day or time, has links, or is too
   long is replaced by the template.
 - If the AI takes more than 3 seconds, errors, or is offline, the rule-based
-  scheduler answers instead. The board always says who planned it.
+  scheduler answers instead. The board says who planned it: "by AI" only when
+  the model's own time, or its reading of a sentence the rules could not read,
+  is in the plan.
 - Voice: the app records up to 5 s (`getUserMedia`), the Worker sends it to
   Whisper (`whisper-large-v3-turbo`). If the mic or the service fails, the
   chips still work.
@@ -487,9 +543,10 @@ Without the Worker the app runs in rules mode, and the board says so.
 - Download: the main script is 2.4 MB (0.66 MB gzipped). IWSDK's UI kit pulls in
   a 4.1 MB icon set we never use; `vite.config.ts` swaps it for the two icons
   the kit needs (`src/stubs/uikit-lucide-lite.ts`).
-- One draw call and one texture per panel; panels redraw only when their
-  content changes. Desktop emulator: 16.7 ms frames (60 fps), no allocations
-  in the frame loop. Not yet measured on a Quest.
+- One draw call and one texture per panel; a panel is redrawn and uploaded only
+  when its content changes. Counted on the live page in a desktop browser
+  (17 Nov): 15 to 21 draw calls a frame, and no texture upload at all while
+  nothing changes. Frame rate on a Quest has not been measured.
 - Far walls get a bigger board (up to 1.4x) so text stays readable.
 
 ## License

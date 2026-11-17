@@ -111,7 +111,11 @@ export function overlapsOf(
       const from = absMinutes(s.day, s.min);
       const to = absMinutes(e.day, e.min);
       if (!(a < to && b > from)) continue;
-      if (who === 'you' && (moved || (from === a && to === b)) && mine.includes(block.title.trim().toLowerCase())) continue;
+      // A calendar that was read keeps titles short ("Call about the Q3 budget re…"): a cut title that
+      // one of the item's own titles starts with is still its own.
+      const title = block.title.trim().toLowerCase();
+      const own = mine.some((t) => t === title || (title.endsWith('…') && title.length > 12 && t.startsWith(title.slice(0, -1))));
+      if (who === 'you' && (moved || (from === a && to === b)) && own) continue;
       out.push({ who, day: s.day, start: s.min, end: e.min, title: block.title });
     }
   };
@@ -342,6 +346,30 @@ export interface Review {
   trial: number | null;
   /** What the agent understood from what you said, and who understood it. */
   heard: { text: string; by: 'ai' | 'rules'; changed: boolean } | null;
+  /**
+   * Set when the item's own limit had no room left and the whole week was searched instead:
+   * the limit that was dropped, in words ("only Thu"). The wall says so.
+   */
+  widened?: string;
+}
+
+/**
+ * Other times for a review. Inside the item's own limit while that has room. When it has
+ * none (the limit was one day and that day is full now) the whole week is searched, and
+ * the review says which limit it dropped: "no other time fits this week" would be false
+ * while other days are free, and it would leave nothing to pinch.
+ */
+function searchIn(
+  cal: CalendarData,
+  kind: ItemKind,
+  old: Slot,
+  rule: Constraint,
+): { rule: Constraint; candidates: Candidate[]; widened?: string } {
+  const inside = candidates(cal, kind, old, rule);
+  const limit = ruleText(rule);
+  if (inside.length > 0 || !limit) return { rule, candidates: inside };
+  const anywhere = candidates(cal, kind, old, {});
+  return anywhere.length > 0 ? { rule: {}, candidates: anywhere, widened: limit } : { rule, candidates: inside };
 }
 
 export function startReview(cal: CalendarData, target: { item: OutboxItem } | { draft: Plan }): Review | null {
@@ -352,23 +380,32 @@ export function startReview(cal: CalendarData, target: { item: OutboxItem } | { 
   const kind: ItemKind = item ? kindOf(item) : draft && draft.task === FOCUS_TASK ? 'focus' : 'call';
   const rule = item ? (item.rule ?? {}) : (draft?.constraint ?? {});
   const text = conflictText(cal, old);
+  const found = searchIn(cal, kind, old, rule);
   return {
     itemId: item?.id ?? null,
     kind,
     old,
     reason: item?.blocked?.why === 'conflict' ? item.blocked.text : text.reason,
     detail: text.detail,
-    rule,
-    candidates: candidates(cal, kind, old, rule),
+    rule: found.rule,
+    candidates: found.candidates,
     trial: null,
     heard: null,
+    ...(found.widened ? { widened: found.widened } : {}),
   };
 }
 
-/** The calendar changed again, or you said a limit: look for other times afresh. */
-export function refreshReview(cal: CalendarData, review: Review, rule: Constraint = review.rule): Review {
+/**
+ * The calendar changed again, or you said a limit: look for other times afresh.
+ * A limit you say here (`said`) is kept exactly as said, even when nothing fits it.
+ */
+export function refreshReview(cal: CalendarData, review: Review, said?: Constraint): Review {
   const trialId = review.trial !== null ? review.candidates[review.trial]?.slot.id : undefined;
-  const next = candidates(cal, review.kind, review.old, rule);
-  const still = trialId ? next.findIndex((c) => c.slot.id === trialId) : -1;
-  return { ...review, rule, candidates: next, trial: still >= 0 ? still : null };
+  const found = said
+    ? { rule: said, candidates: candidates(cal, review.kind, review.old, said) }
+    : searchIn(cal, review.kind, review.old, review.rule);
+  const still = trialId ? found.candidates.findIndex((c) => c.slot.id === trialId) : -1;
+  const { widened: was, ...rest } = review;
+  const widened = said ? undefined : (found.widened ?? was);
+  return { ...rest, rule: found.rule, candidates: found.candidates, trial: still >= 0 ? still : null, ...(widened ? { widened } : {}) };
 }

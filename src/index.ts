@@ -39,6 +39,28 @@ void (async () => {
 const WORKER_URL: string = String(import.meta.env.VITE_AGENT_URL ?? '').trim();
 initSetup(WORKER_URL);
 
+// Start over: the saved board (approvals, the example change), today's queue and learned rules.
+// Wired before anything else loads, so it can rescue a page that fails to start.
+const reset = document.getElementById('reset-board') as HTMLButtonElement | null;
+const hasBoard = () => {
+  try {
+    return localStorage.getItem(STORAGE_KEY) !== null;
+  } catch {
+    return false;
+  }
+};
+if (reset) {
+  reset.hidden = !hasBoard();
+  reset.addEventListener('click', () => {
+    try {
+      for (const key of [STORAGE_KEY, QUEUE_KEY, LEARN_KEY]) localStorage.removeItem(key);
+    } catch {
+      // storage blocked: there was nothing to clear
+    }
+    location.reload();
+  });
+}
+
 // A linked calendar is read again first (at most 4 s), so the board starts on today's truth.
 // The board is imported after that, because it picks its calendar when it loads.
 void refreshLinked(WORKER_URL)
@@ -58,6 +80,9 @@ void refreshLinked(WORKER_URL)
   const intro = document.getElementById('intro') as HTMLDivElement;
   const enter = document.getElementById('enter-xr') as HTMLButtonElement;
   const note = document.getElementById('xr-note') as HTMLParagraphElement;
+  // Everything is loaded: until here the button says "Loading…" and cannot be pressed.
+  enter.textContent = 'Enter mixed reality';
+  enter.disabled = false;
 
   // No mixed reality here: explain, and say the mouse works like a pinch.
   const noXr = (why: string) => {
@@ -92,26 +117,6 @@ void refreshLinked(WORKER_URL)
     intro.hidden = false;
     showBtn.hidden = true;
   });
-  // Start over: the saved board (approvals, the example change), today's queue and learned rules.
-  const reset = document.getElementById('reset-board') as HTMLButtonElement | null;
-  const hasBoard = () => {
-    try {
-      return localStorage.getItem(STORAGE_KEY) !== null;
-    } catch {
-      return false;
-    }
-  };
-  if (reset) {
-    reset.hidden = !hasBoard();
-    reset.addEventListener('click', () => {
-      try {
-        for (const key of [STORAGE_KEY, QUEUE_KEY, LEARN_KEY]) localStorage.removeItem(key);
-      } catch {
-        // storage blocked: there was nothing to clear
-      }
-      location.reload();
-    });
-  }
   // Desktop preview: the list follows what you approve with the mouse.
   window.addEventListener('agentwall:saved', () => {
     const active = activeCalendar();
@@ -133,4 +138,13 @@ void refreshLinked(WORKER_URL)
     intro.hidden = !flat || userHid;
     showBtn.hidden = !flat || !userHid;
   });
-});
+})
+  .catch((e) => {
+    // The app did not start (a failed download, a browser without WebGL): say so instead of a dead button.
+    console.error(e);
+    const enter = document.getElementById('enter-xr');
+    const note = document.getElementById('xr-note');
+    if (enter) enter.textContent = 'Could not start';
+    if (note) note.textContent = 'Agent Wall could not start. Reload the page. If it still does not start, use “Start over” below.';
+    if (reset) reset.hidden = false;
+  });

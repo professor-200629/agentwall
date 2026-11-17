@@ -35,10 +35,18 @@ export const DESK = {
   /** Nearest table edge must be within this horizontal reach (m) and in front. */
   maxReach: 1.0,
   maxAngleDeg: 70,
-  /** The card sits at least this far in from the near edge, and this high above the top (m). */
+  /** The card sits at least this far in from the near edge (m). */
   inset: 0.14,
-  lift: 0.06,
-  tilt: (35 * Math.PI) / 180,
+  /**
+   * On a table the card rests on the top: the bottom of its grab bar is `lift` above it.
+   * (The card's centre used to be 6 cm above the top. Since the card was made larger and got a bar
+   * underneath, its lower 8 cm and the whole bar were below the table's surface.)
+   */
+  lift: 0.015,
+  /** From the card's centre down to the bottom of its grab bar, in the card's own metres (board.ts: half the card, its glow, the gap, the bar). */
+  belowCentre: 0.374,
+  /** It leans well back, like a sheet propped on the desk: resting on the top, its upper edge is no higher than it was. */
+  tilt: (60 * Math.PI) / 180,
   /** Comfortable horizontal distance from the eyes to the card (m), on a table or in the lap. */
   comfort: 0.65,
   /** No table: in front of and below the eyes (m), leaning back like a sheet on a desk. */
@@ -137,14 +145,18 @@ export function chooseDesk(head: V3, forward: V3, planes: ReadonlyArray<PlaneInp
     const n = flatLen(inward) || 1;
     const least = Math.min(DESK.inset, n * 0.5);
     const k = Math.min(n, Math.max(least, DESK.comfort - reach)) / n;
-    const position = { x: near.x + inward.x * k, y: y + DESK.lift, z: near.z + inward.z * k };
+    // The card's centre is as far above the top as its lower half and its bar need at its size here.
+    const up = (scale: number) => DESK.lift + DESK.belowCentre * scale * Math.cos(DESK.tilt);
+    const at = (dy: number) => ({ x: near.x + inward.x * k, y: y + dy, z: near.z + inward.z * k });
+    const scale = cardScale(head, at(up(cardScale(head, at(up(DESK.baseScale))))));
+    const position = at(up(scale));
     const back = sub(head, position);
     const place: DeskPlacement = {
       kind: 'desk',
       position,
       yaw: yawFacing({ x: back.x, y: 0, z: back.z }),
       tilt: DESK.tilt,
-      scale: cardScale(head, position),
+      scale,
       planeId: plane.id,
     };
     const score = reach;

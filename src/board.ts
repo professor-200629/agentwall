@@ -228,7 +228,7 @@ export class Board {
   readonly altRows = [0, 1].map((i) => new CanvasPanel(LAYOUT.pill.w, LAYOUT.pill.h, `alt-slot-${i}`));
   private tray = new CanvasPanel(LAYOUT.tray.w, LAYOUT.tray.h, 'outbox-tray');
   readonly chipPanels = LAYOUT.chips.map((r, i) => new CanvasPanel(r.w, r.h, `chip-${CHIPS[i].id}`));
-  private replanPanel = new CanvasPanel(LAYOUT.replan.w, LAYOUT.replan.h, 'replan-card');
+  readonly replanPanel = new CanvasPanel(LAYOUT.replan.w, LAYOUT.replan.h, 'replan-card');
   readonly replanButtons = [
     new CanvasPanel(LAYOUT.replanYes.w, LAYOUT.replanYes.h, 'replan-yes'),
     new CanvasPanel(LAYOUT.replanNo.w, LAYOUT.replanNo.h, 'replan-no'),
@@ -963,11 +963,12 @@ export class Board {
     const rv = this.review;
     const view: MuralView = {
       week,
-      // In a review the old time is drawn as a conflict, never as the agent's pick.
-      chosen: rv && rv.trial === null ? null : plan.slot,
-      alternatives: rv ? [] : plan.alternatives,
+      // In a review the old time is drawn as a conflict, never as the agent's pick. The same when
+      // the review was put off ("Not now"): the card is blocked, so its time is no pick either.
+      chosen: (rv && rv.trial === null) || this.inviteBlocked ? null : plan.slot,
+      alternatives: rv || this.inviteBlocked ? [] : plan.alternatives,
       progress: this.sweep >= 1 ? 1 : step / steps,
-      reason: plan.reason,
+      reason: this.inviteBlocked && !rv ? '' : plan.reason,
       tag: plan.by === 'ai' ? 'AI' : plan.by === 'you' ? 'YOU' : 'RULES',
       fresh: this.fresh,
       hover: this.sweep >= 1 ? this.muralHover : null,
@@ -996,7 +997,7 @@ export class Board {
     this.altRows.forEach((row, i) => {
       const alt = plan?.alternatives[i];
       const di = alt && week ? week.days.indexOf(alt.day) : -1;
-      row.mesh.visible = !!alt && di >= 0 && done && this.mural.mesh.visible && this.review === null;
+      row.mesh.visible = !!alt && di >= 0 && done && this.mural.mesh.visible && this.review === null && !this.inviteBlocked;
       if (!row.mesh.visible || !alt || !week) return;
       const g = muralGrid(this.mural.w, this.mural.h, week);
       const cx = g.x(di) + g.colW / 2;

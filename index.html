@@ -47,6 +47,9 @@
         border: 1px solid #30363d; background: #161b22; color: #e6edf3; margin: 10px 8px 0 0;
         text-decoration: none; display: inline-block;
       }
+      /* The rule above sets display, which would win over the browser's own [hidden] rule. */
+      #cal-setup button[hidden] { display: none; }
+      #sent-hint { margin: 2px 0 0; font-size: 12px; color: #8b949e; }
       #cal-status { margin: 8px 0 0; font-weight: 600; color: #e6edf3; }
       #cal-msg { margin: 8px 0 0; min-height: 1em; }
       #cal-msg.bad { color: #ffa198; }
@@ -75,9 +78,9 @@
     <div id="intro">
       <button id="hide-intro" type="button" aria-label="Hide this box">Hide</button>
       <h1>Agent Wall</h1>
-      <p>Your week on your real wall, the decision on your desk. When a time you approved stops fitting, try another one in the room and approve exactly what you see. Nothing is ever sent.</p>
+      <p>An AI agent plans your week on your real wall; the one card that needs you lands on your desk. When a time you approved stops fitting, the wall blocks it, shows why, and lets you try another. Nothing leaves without your pinch-and-hold. It starts on a labelled sample week.</p>
       <details id="how">
-        <summary>What to do (3 steps)</summary>
+        <summary>What to do</summary>
         <ol>
           <li><b>Try it:</b> point at “Try it” on the wall and pinch (thumb + index finger). A labelled example puts a new busy block over an approved call.</li>
           <li><b>Choose:</b> pinch one of the two big times. It is only a preview: the old time stays on the wall, marked CONFLICT.</li>
@@ -86,11 +89,12 @@
           <li><b>Also:</b> pinch “Find time + draft invite” to plan from scratch, or 🎤 Speak a limit such as “not before lunch”.</li>
         </ol>
       </details>
-      <button id="enter-xr" type="button">Enter mixed reality</button>
+      <button id="enter-xr" type="button" disabled>Loading…</button>
       <p id="xr-note"></p>
       <div id="sent-box" hidden>
         <h2>Approved by you</h2>
         <ul id="sent-list"></ul>
+        <p id="sent-hint">No mail app on this device (a headset has none)? Use “Copy text”.</p>
       </div>
       <button id="reset-board" type="button" hidden>Start over (clear this board and the example)</button>
       <details id="cal-setup">

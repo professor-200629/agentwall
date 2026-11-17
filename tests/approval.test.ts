@@ -113,6 +113,18 @@ describe('approve and the demo outbox', () => {
     expect(swapped.approval).toBe('needs');
   });
 
+  it('the time you leave is a runner-up only while it was still open', () => {
+    const plan = makePlan(cal);
+    const first = plan.slot!;
+    // Still a draft: the time you leave is "also free", so you can go back to it.
+    expect(chooseSlot(cal, plan, plan.alternatives[0]).alternatives[0].id).toBe(first.id);
+    // Approved: that time is held now (or blocked by a conflict). It is not offered as "also free".
+    const approved = approve(plan, 'x')!.plan;
+    const moved = chooseSlot(cal, approved, approved.alternatives[0]);
+    expect(moved.alternatives.some((s) => s.id === first.id)).toBe(false);
+    expect(moved.slot!.id).toBe(approved.alternatives[0].id);
+  });
+
   it('outbox keeps newest first, no duplicates, capped', () => {
     const plan = makePlan(cal);
     const a = approve(plan, 'x')!.item;

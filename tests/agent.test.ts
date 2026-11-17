@@ -10,7 +10,9 @@ import {
   type AiAnswer,
   type FetchLike,
 } from '../src/logic/agent.js';
-import { makePlan } from '../src/logic/plan.js';
+import { isFocus, makeFocusPlan } from '../src/logic/focus.js';
+import { makeMovePlan } from '../src/logic/move.js';
+import { buildReceipt, makePlan } from '../src/logic/plan.js';
 import { mergeConstraint, parseRequest, ruleText } from '../src/logic/request.js';
 import type { CalendarData } from '../src/logic/scheduler.js';
 
@@ -244,6 +246,55 @@ describe('chips always obey their rule (code review 14 Nov)', () => {
     );
     expect(r.plan!.constraint).toEqual({ day: THU });
     expect(r.plan!.slot!.id).toBe(`${THU}T12:30`);
+  });
+
+  it('the AI is credited only when something it supplied is in the plan', () => {
+    const after4 = { ...base.rule, after: '16:00' };
+    // The rules read the chip, and the model's time breaks the rule: nothing of the model's is used.
+    const lied = planFromAi(cal, { ...base, rule: after4, slotId: '2026-11-17T13:00', body: 'Hi Sam, Tuesday 1:00 PM?' }, start, 'only after 4 PM');
+    expect(lied.plan!.slot!.id).toBe(`${WED}T17:30`);
+    expect(lied.plan!.invite!.source).toBe('rules');
+    expect(lied.note).toContain('did not fit');
+    expect(lied.by).toBe('rules');
+    expect(lied.plan!.by).toBe('rules');
+    const receipt = buildReceipt(cal, lied.plan!, 0, '9:02 AM');
+    expect(receipt.some((l) => l.tag === 'AI')).toBe(false);
+    expect(receipt).toContainEqual({ tag: 'RULES', text: 'Picked Wed 5:30 PM and wrote the email.' });
+    // Its time fits the rule: it is the model's pick, and credited.
+    const fits = planFromAi(cal, { ...base, rule: after4, slotId: `${THU}T16:00` }, start, 'only after 4 PM');
+    expect(fits.plan!.slot!.id).toBe(`${THU}T16:00`);
+    expect(fits.by).toBe('ai');
+    // Its time is thrown out, but only the model could read the sentence: its reading is in the plan.
+    const read = planFromAi(cal, { ...base, rule: { ...base.rule, day: THU }, slotId: '2026-11-17T13:00' }, start, 'whenever Sam is out of class on the 19th');
+    expect(read.plan!.constraint).toEqual({ day: THU });
+    expect(read.plan!.slot!.day).toBe(THU);
+    expect(read.by).toBe('ai');
+  });
+
+  it('a sentence the rules cannot read never swaps a focus block or a move for a call invite', async () => {
+    let asked = 0;
+    const model: FetchLike = async () => {
+      asked++;
+      return new Response(JSON.stringify({ ...base, slotId: '2026-11-17T13:00' }), { status: 200, headers: { 'content-type': 'application/json' } });
+    };
+    const url = 'https://w.example';
+    const unclear = 'whatever works I suppose';
+    expect(parseRequest(unclear, cal).intent).toBe('unknown');
+    // The model only plans calls, so with a focus block or a move on the desk it is not asked at all.
+    const focus = makeFocusPlan(cal);
+    const onFocus = await runAgent(cal, unclear, focus, { url, fetch: model });
+    expect(onFocus.plan).toBeNull();
+    const move = makeMovePlan(cal, { day: '2026-11-17', start: at(14), end: at(15, 30), title: 'Design review' });
+    const onMove = await runAgent(cal, unclear, move, { url, fetch: model });
+    expect(onMove.plan).toBeNull();
+    expect(asked).toBe(0);
+    // A limit the rules can read still re-plans the focus block itself.
+    const ruled = await runAgent(cal, 'only after 2 PM', focus, { url, fetch: model });
+    expect(isFocus(ruled.plan)).toBe(true);
+    expect(asked).toBe(0);
+    // With a call on the desk the model is asked, as before.
+    await runAgent(cal, unclear, start, { url, fetch: model });
+    expect(asked).toBe(1);
   });
 
   it('a busy AI (429) shows as "AI busy", not an error code', async () => {

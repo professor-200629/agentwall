@@ -66,6 +66,13 @@ const dir = mkdtempSync(join(tmpdir(), 'agentwall-'));
 const file = join(dir, 'test.ics');
 writeFileSync(file, ics);
 const dayId = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+// The repeat runs on four days in a row from day 2. Only those that are working days are on the wall
+// (started on a Tuesday, the fourth one falls on a Saturday).
+const repeatsShown = [0, 1, 2, 3].filter((k) => {
+  const r = new Date(days[1].getFullYear(), days[1].getMonth(), days[1].getDate() + k);
+  return days.some((d) => dayId(d) === dayId(r));
+}).length;
+const BUSY = 5 + repeatsShown;
 
 // ---------- 1. Sample week by default ----------
 cli(['browser', 'reload']);
@@ -87,10 +94,10 @@ page({ do: 'file', selector: '#cal-file', path: file });
 await sleep(5000); // it reads, says so, then reloads
 c = hook('calendar');
 check('after the import the wall is on YOUR calendar, for the next 5 working days', c.real === true && /^YOUR CALENDAR/.test(c.label) && c.days[0] === dayId(days[0]) && c.days.length === 5, JSON.stringify(c));
-check('busy times were read (5 long blocks + 4 repeats inside working hours)', c.busy === 9 && c.guest === 'Priya', `busy=${c.busy} guest=${c.guest}`);
+check(`busy times were read (5 long blocks + ${repeatsShown} repeats on working days)`, c.busy === BUSY && c.guest === 'Priya', `busy=${c.busy} guest=${c.guest}`);
 page({ do: 'open', selector: '#cal-setup' });
 const status = evalPage(`document.getElementById('cal-status').textContent`);
-check('start page shows it', /YOUR CALENDAR/.test(status) && /9 busy times/.test(status), status);
+check('start page shows it', /YOUR CALENDAR/.test(status) && status.includes(`${BUSY} busy times`), status);
 const stored = evalPage(`localStorage.getItem('agentwall.calendar.v1')`);
 check('only blocks are kept, not the calendar text', !/VCALENDAR|RRULE|UID/.test(stored) && /salary review/.test(stored));
 shot('start-page-your-calendar');
@@ -149,7 +156,7 @@ page({ do: 'file', selector: '#cal-file', path: file2 });
 await sleep(5500); // it reads, says so, then reloads; the board checks what was approved as it starts
 c = hook('calendar');
 let kept = hook('outbox');
-check('the newer read is on the wall (one more busy time) and the approval was kept, not wiped', c.real === true && c.busy === 10 && kept.length === 1 && kept[0].slotId === approved, `busy=${c.busy} outbox=${kept.length}`);
+check('the newer read is on the wall (one more busy time) and the approval was kept, not wiped', c.real === true && c.busy === BUSY + 1 && kept.length === 1 && kept[0].slotId === approved, `busy=${c.busy} outbox=${kept.length}`);
 check('it is blocked at once: the same check as the example', kept[0].blocked?.why === 'conflict' && /overlaps a new busy block$/.test(kept[0].blocked.text) && !/dentist/i.test(kept[0].blocked.text), JSON.stringify(kept[0].blocked));
 let rv = hook('review');
 check('the review is open before anything else, and says what is not known', rv?.old === approved && rv.detail === 'Guest availability unknown' && hook('flow').card === null, JSON.stringify(rv && [rv.old, rv.detail, rv.candidates.map((x) => x.label)]));

@@ -141,7 +141,9 @@ export function makePlan(
  */
 export function chooseSlot(cal: CalendarData, plan: Plan, slot: Slot): Plan {
   if (plan.slot && plan.slot.id === slot.id) return plan;
-  const alternatives = [plan.slot, ...plan.alternatives]
+  // The time you leave becomes a runner-up only while it was still open: one that is approved
+  // (it is held now) or blocked by a conflict is not "also free".
+  const alternatives = [plan.approval === 'needs' ? plan.slot : null, ...plan.alternatives]
     .filter((s): s is Slot => s !== null && s.id !== slot.id)
     .slice(0, 2);
   return {
@@ -305,6 +307,19 @@ export function approve(
   if (ctx.example) item.example = true;
   if (plan.replaces) item.replaces = plan.replaces;
   return { plan: { ...plan, approval: 'approved', version: plan.version + 1 }, item };
+}
+
+/**
+ * An id is used once. An item's id is its time plus the plan's version, and the version counts
+ * from 1 again after a fresh start: a later approval for the same time could get the id of an
+ * older item, and inherit its history ("replaced by ..." would land on the new approval).
+ * Returns `id`, or `id.2`, `id.3`, ... when an item has that id or names it as the one it replaced.
+ */
+export function freshId(outbox: OutboxItem[], id: string): string {
+  const taken = (x: string) => outbox.some((o) => o.id === x || o.replaces === x || o.blocked?.by === x);
+  let out = id;
+  for (let n = 2; taken(out) && n < 1000; n++) out = `${id}.${n}`;
+  return out;
 }
 
 /** Newest first, no duplicates, at most `max` items. */

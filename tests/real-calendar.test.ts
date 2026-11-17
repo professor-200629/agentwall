@@ -52,6 +52,14 @@ describe('your own calendar: an .ics text becomes busy blocks', () => {
     expect(busyFromIcs('BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nnonsense', WEEK, ist).ok).toBe(false);
   });
 
+  it('a file the parser accepts but the reader cannot walk is refused, never thrown', () => {
+    // Two calendars one after the other in one file (some exports do this).
+    const one = cal(ev(['UID:1', 'DTSTART:20261117T043000Z', 'DTEND:20261117T053000Z', 'SUMMARY:Standup']));
+    const two = `${one}\r\n${one}`;
+    expect(() => busyFromIcs(two, WEEK, ist)).not.toThrow();
+    expect(busyFromIcs(two, WEEK, ist)).toEqual({ ok: false, error: 'This calendar file could not be read.' });
+  });
+
   it('a UTC event lands on the wearer\'s wall clock', () => {
     const b = blocks(cal(ev(['UID:1', 'DTSTART:20261117T043000Z', 'DTEND:20261117T053000Z', 'SUMMARY:Standup'])));
     expect(b).toEqual([{ start: '2026-11-17T10:00', end: '2026-11-17T11:00', title: 'Standup' }]);

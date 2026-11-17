@@ -40,7 +40,8 @@ import { Board, INVITE, type CalendarButtonView, type ReviewView } from './board
 import { CHIPS } from './chips.js';
 import { activeCalendar, refreshLinked, savedCalendar } from './calendar-source.js';
 import { runAgent, understandRule, type AgentResult, type FetchLike } from './logic/agent.js';
-import { EXAMPLE, exampleApproval, exampleBlock, withExample } from './logic/example-change.js';
+import { heldBy, holdsTime, withApproved } from './logic/approved.js';
+import { EXAMPLE, exampleApproval, exampleBlock, isExampleBlock, withExample } from './logic/example-change.js';
 import { slotInstant } from './logic/handoff.js';
 import {
   itemSlot,
@@ -65,6 +66,7 @@ import { parsePrint, SAME_WALL, serializePrint, wallPrint, type WallPrint } from
 import {
   addToOutbox,
   approve,
+  freshId,
   buildReceipt,
   chooseSlot,
   isLinked,
@@ -200,6 +202,11 @@ const same = (a: Moving | undefined, b: Moving) => !!a && a.day === b.day && a.s
 function greeting(hour: number): string {
   return hour < 12 ? 'GOOD MORNING' : hour < 17 ? 'GOOD AFTERNOON' : 'GOOD EVENING';
 }
+
+/** A hold is a still hand: farther than this from where the pinch began, the hold is cancelled. */
+const HOLD_STILL_M = 0.08;
+/** A pinch on the card this soon after an approval is the same pinch bouncing as it lets go, not an Unsend. */
+const UNSEND_GRACE_S = 0.5;
 
 /** Seconds to look at the new spot after pinching "Move board". */
 export const MOVE_SECONDS = 3;
@@ -438,6 +445,17 @@ export class BoardSystem extends createSystem({
   private deskPlace: DeskPlacement | null = null;
   /** A pinch that started on the invite and has not been released yet. */
   private inviteHeld = false;
+  /** Where the hand was when the pinch on the card began (see HOLD_STILL_M). */
+  private holdFrom: { x: number; y: number; z: number } | null = null;
+  /** What the week on the wall was last built from (see currentWeek). */
+  private weekOf: { outbox: OutboxItem[] | null; plan: Plan | null; cal: CalendarData | null; own: string | null; standing: string; shown: CalendarData } = {
+    outbox: null,
+    plan: null,
+    cal: null,
+    own: null,
+    standing: '',
+    shown: baseCalendar,
+  };
   private releaseHold: () => void = () => {};
   private unsendSeconds = UNSEND_SECONDS;
   /** The morning queue: what still needs your OK today, and the days in a row. */
@@ -505,6 +523,9 @@ export class BoardSystem extends createSystem({
     // The board itself is a (do-nothing) ray target: IWSDK only shows the hand ray's
     // cursor on targets, and the first Quest tester saw no pointer until exactly on a chip.
     this.backEntity = interactive(this.board.backPanel.mesh, boardEntity);
+    // The agent's card is a (do-nothing) ray target as well: a pinch on its body, or one that misses
+    // a button by a few centimetres, must not go through it to the week or a pill behind it.
+    interactive(this.board.replanPanel.mesh, boardEntity);
     // The week itself is touchable: pick a free time, remove a rule, or ask why.
     interactive(this.board.mural.mesh, boardEntity);
 
@@ -544,6 +565,8 @@ export class BoardSystem extends createSystem({
     // release always arrives (see capture()).
     const back = this.board.backPanel.mesh as unknown as PointerTarget;
     back.addEventListener('pointerdown', (e) => capture(back, e));
+    const cardBody = this.board.replanPanel.mesh as unknown as PointerTarget;
+    cardBody.addEventListener('pointerdown', (e) => capture(cardBody, e));
     const mural = this.board.mural.mesh as unknown as PointerTarget;
     mural.addEventListener('pointerdown', (e) => {
       capture(mural, e);
@@ -563,7 +586,20 @@ export class BoardSystem extends createSystem({
     invite.addEventListener('pointerdown', (e) => {
       capture(invite, e);
       this.inviteHeld = true;
+      this.holdFrom = e.pointerPosition ? { x: e.pointerPosition.x, y: e.pointerPosition.y, z: e.pointerPosition.z } : null;
       this.presses.push({ kind: 'invite', index: 0 });
+    });
+    // A hold is a still hand. A hand that travels while it pinches the card is trying to move it
+    // (a Quest window is grabbed anywhere): that must not fill the ring and approve. The mouse has
+    // no hand position (the ray starts at the camera), so this never fires on the desktop.
+    invite.addEventListener('pointermove', (e) => {
+      const from = this.holdFrom;
+      const at = e.pointerPosition;
+      if (!this.inviteHeld || !from || !at || this.hold.progress <= 0) return;
+      if (Math.hypot(at.x - from.x, at.y - from.y, at.z - from.z) > HOLD_STILL_M) {
+        this.holdFrom = null;
+        this.cancelHold('your hand moved · to move the card, pinch the bar under it');
+      }
     });
     const release = () => {
       this.inviteHeld = false;
@@ -609,6 +645,9 @@ export class BoardSystem extends createSystem({
     // The calendar on the wall is the newest one known (a new file or a re-read link was
     // loaded before the board): everything approved is checked against it before anything else.
     this.recheck();
+    // An invite that was mid-Unsend when the app closed counts as sent (above). Write that down
+    // now, so the start page lists it without waiting for the next change.
+    if (saved?.outbox.some((o) => o.status === 'sending')) this.save();
     if (!this.review) this.firstCard();
 
     // A judge may enter through Quest Browser's own Enter button, which never clicks our
@@ -796,15 +835,32 @@ export class BoardSystem extends createSystem({
     if (!this.plan) return null;
     const moving = this.plan.moving;
     const focus = isFocus(this.plan) || !!moving;
-    const key = JSON.stringify([this.plan.constraint, this.cal.busy.guest.length, this.cal.busy.owner.length, this.prep, focus, moving ?? null, this.calVersion]);
+    // In a review the week is drawn for the limit the review searches in. That is the item's own
+    // limit, or none when that limit had no room left: the times on offer must not look ruled out.
+    const constraint = this.review ? this.review.rule : this.plan.constraint;
+    // What you approved is part of your week: drawn as your own blocks, as the agent sees them.
+    // The one the desk card itself shows is left out: that is the gold time.
+    if (this.weekOf.outbox !== this.outbox || this.weekOf.plan !== this.plan || this.weekOf.cal !== this.cal) {
+      const mine = this.plan.approval === 'approved' && this.plan.slot ? (heldBy(this.outbox, this.plan.slot)?.id ?? null) : null;
+      this.weekOf = {
+        outbox: this.outbox,
+        plan: this.plan,
+        cal: this.cal,
+        own: mine,
+        standing: this.outbox.filter(holdsTime).map((o) => o.slotId).join(),
+        shown: withApproved(this.cal, this.outbox, mine),
+      };
+    }
+    const { own, standing, shown: cal } = this.weekOf;
+    const key = JSON.stringify([constraint, cal.busy.guest.length, cal.busy.owner.length, this.prep, focus, moving ?? null, this.calVersion, own, standing]);
     if (key !== this.weekKey) {
       this.weekKey = key;
       // A meeting being moved does not block its own new time; it is drawn where it is now.
       const week = moving
-        ? weekModel(withoutBlock(this.cal, moving), this.plan.constraint, { focus: true, minutes: moving.end - moving.start })
-        : weekModel(this.cal, this.plan.constraint, { focus });
+        ? weekModel(withoutBlock(cal, moving), constraint, { focus: true, minutes: moving.end - moving.start })
+        : weekModel(cal, constraint, { focus });
       const extra: WeekBlock[] = [];
-      if (moving && this.cal.busy.owner.length !== withoutBlock(this.cal, moving).busy.owner.length) {
+      if (moving && cal.busy.owner.length !== withoutBlock(cal, moving).busy.owner.length) {
         extra.push({ day: moving.day, start: moving.start, end: moving.end, who: 'you', title: `${moving.title} (now)` });
       }
       // The agent's prep block is shown, but never counts against the call it belongs to.
@@ -861,11 +917,13 @@ export class BoardSystem extends createSystem({
             rv.candidates.length === 0 ? 'no time fits that' : rv.heard.changed ? `now ${times}` : 'the same times still fit'
           }`
         : '';
+      // The item's own limit had no room left, so the whole week was searched: say which limit was dropped.
+      const widened = !rv.heard && rv.widened ? `No other time fits “${rv.widened}” · these are the nearest in the week` : '';
       view = {
         title: example ? 'CONFLICT · EXAMPLE CHANGE' : 'CONFLICT',
         reason: rv.candidates.length === 0 ? `${rv.reason} · no other time fits this week` : rv.reason,
         detail: rv.detail,
-        note: heard,
+        note: heard || widened,
         noteAi: rv.heard?.by === 'ai',
         candidates: rv.candidates,
         trial: rv.trial,
@@ -907,7 +965,7 @@ export class BoardSystem extends createSystem({
       const parsed = parseRequest(text, this.cal);
       if (parsed.intent === 'rule' || parsed.intent === 'clear') {
         const rule = parsed.intent === 'clear' ? {} : mergeConstraint(this.plan.constraint, parsed.rule);
-        const plan = makeMovePlan(this.cal, moving, rule, ruleText(rule), this.plan);
+        const plan = makeMovePlan(this.planCal(), moving, rule, ruleText(rule), this.plan);
         this.setPlan(plan);
         playTick();
         this.say(`Planned by rules${heard ? ` · ${heard}` : ''}`, 'warn');
@@ -920,7 +978,7 @@ export class BoardSystem extends createSystem({
     const t0 = performance.now();
     let result: AgentResult;
     try {
-      result = await runAgent(this.cal, text, this.plan, { url: this.agentUrl, fetch: this.fetchImpl });
+      result = await runAgent(this.planCal(), text, this.plan, { url: this.agentUrl, fetch: this.fetchImpl });
     } finally {
       if (id === this.requestId) this.busy = false;
     }
@@ -989,7 +1047,7 @@ export class BoardSystem extends createSystem({
       } else if (press.kind === 'calendar') {
         void this.checkCalendar();
       } else if (press.kind === 'invite' && this.sendingUntil !== null) {
-        this.unsend();
+        if (this.clockS - (this.sendingUntil - this.unsendSeconds) > UNSEND_GRACE_S) this.unsend();
       } else if (press.kind === 'voice') {
         const on = !speechEnabled();
         setSpeechEnabled(on);
@@ -1159,11 +1217,26 @@ export class BoardSystem extends createSystem({
     return overlapsOf(cal, plan.slot, undefined, isFocus(plan) || !!plan.moving).length > 0;
   }
 
+  /** The calendar the agent plans on: what was read, plus what you already approved (it is busy time now). */
+  private planCal(): CalendarData {
+    return withApproved(this.cal, this.outbox);
+  }
+
   private approveNow(current: Plan): void {
     // The approval boundary: the time must still be free on the newest calendar known.
     if (this.planOverlaps(current)) {
       this.hold.cancel();
       this.recheck();
+      return;
+    }
+    // One time, one approval: another approval that still stands may hold this time already
+    // (you picked it on the week yourself, or it was approved after this card was planned).
+    const held = current.slot ? heldBy(this.outbox, current.slot, current.replaces ?? null) : null;
+    const heldAt = held ? itemSlot(held) : null;
+    if (held && heldAt) {
+      this.hold.cancel();
+      this.say(`You already approved ${whenLabel(heldAt)} · nothing new was approved · pick another time`, 'warn');
+      playTick();
       return;
     }
     // Approving a new time for a call that is blocked by a conflict replaces that call,
@@ -1176,7 +1249,7 @@ export class BoardSystem extends createSystem({
       startUtc: plan.slot ? slotInstant(this.cal, plan.slot) : null,
     });
     if (!result) return;
-    const item: OutboxItem = { ...result.item, status: 'sending' };
+    const item: OutboxItem = { ...result.item, id: freshId(this.outbox, result.item.id), status: 'sending' };
     this.outbox = addToOutbox(this.outbox, item);
     this.currentItemId = item.id;
     this.sendingUntil = this.clockS + this.unsendSeconds;
@@ -1306,7 +1379,7 @@ export class BoardSystem extends createSystem({
       const meeting = this.moveOffer;
       this.moveOffer = null;
       if (yes && meeting) {
-        const plan = makeMovePlan(this.cal, meeting, {}, '', this.plan ?? undefined);
+        const plan = makeMovePlan(this.planCal(), meeting, {}, '', this.plan ?? undefined);
         this.setPlan(plan);
         this.say(plan.slot ? `Found a new time for ${meeting.title} · needs your hold` : `No other time fits ${meeting.title} this week`, plan.slot ? 'ai' : 'warn');
       } else {
@@ -1396,6 +1469,12 @@ export class BoardSystem extends createSystem({
     if (this.busy || this.refreshing) return;
     playTick();
     const stale = this.stale();
+    // One thing at a time: a review opened over a card that is still in its Unsend window would let
+    // the pending send land on the wrong item.
+    if (this.sendingUntil !== null && (stale || this.plan?.moving)) {
+      this.say('Still sending · wait for it, or pinch the card to Unsend', 'muted');
+      return;
+    }
     if (stale) {
       this.beginReview({ item: stale });
       return;
@@ -1429,17 +1508,24 @@ export class BoardSystem extends createSystem({
         this.say('No free time is left in the sample week · reset it on the start page', 'warn');
         return;
       }
-      this.outbox = addToOutbox(this.outbox, seed.item);
+      const item: OutboxItem = { ...seed.item, id: freshId(this.outbox, seed.item.id) };
+      this.outbox = addToOutbox(this.outbox, item);
       this.animateNext = false;
       this.setPlan(seed.plan, false);
-      this.currentItemId = seed.item.id;
+      this.currentItemId = item.id;
       this.board.setOutbox(this.outbox);
       target = seed.plan.slot;
     }
     const block = exampleBlock(this.cal, target);
     this.exampleBlocks = [...this.exampleBlocks, block].slice(-EXAMPLE.maxBlocks);
     this.suggestCalendar = false;
-    this.loadSnapshot(withExample(this.cal, [block]));
+    this.loadSnapshot(this.withKeptExamples());
+  }
+
+  /** The week with only the example blocks that are kept: older ones leave it, so the sample week never fills up. */
+  private withKeptExamples(): CalendarData {
+    const owner = this.cal.busy.owner.filter((b) => !isExampleBlock(b));
+    return withExample({ ...this.cal, busy: { owner, guest: this.cal.busy.guest } }, this.exampleBlocks);
   }
 
   /** Read your linked calendar again. A failed read keeps what was known and says so. */
@@ -1497,10 +1583,11 @@ export class BoardSystem extends createSystem({
     }
     if (rv) {
       // Already reviewing: look for other times afresh; a trial whose time went is dropped.
-      const next = refreshReview(this.cal, rv);
+      const next = refreshReview(this.planCal(), rv);
       const lostTrial = rv.trial !== null && (next.trial === null || draftGone);
       this.review = lostTrial ? { ...next, trial: null } : next;
       if (lostTrial) {
+        if (this.sendingUntil !== null) this.unsend(); // a trial still in its Unsend window is pulled back first
         this.animateNext = false;
         this.setPlan(this.reviewBase, false);
         if (rv.itemId) this.currentItemId = rv.itemId;
@@ -1509,7 +1596,7 @@ export class BoardSystem extends createSystem({
     } else {
       const item = needsReview(this.outbox);
       if (draftGone && plan && !plan.moving) this.beginReview({ draft: plan });
-      else if (item) this.beginReview({ item });
+      else if (item && this.sendingUntil === null) this.beginReview({ item });
       else if (draftGone) {
         this.setPlan(null, false);
         this.say('That time is busy now · plan it again', 'warn');
@@ -1529,7 +1616,7 @@ export class BoardSystem extends createSystem({
 
   /** Start reviewing one conflict: the old card comes back to the desk, blocked. */
   private beginReview(target: { item: OutboxItem } | { draft: Plan }): void {
-    const review = startReview(this.cal, target);
+    const review = startReview(this.planCal(), target);
     if (!review) return;
     const item = 'item' in target ? target.item : null;
     const mine = item !== null && this.plan?.approval === 'approved' && this.currentItemId === item.id;
@@ -1612,7 +1699,7 @@ export class BoardSystem extends createSystem({
     const t0 = performance.now();
     let got: Awaited<ReturnType<typeof understandRule>>;
     try {
-      got = await understandRule(this.cal, text, rv.rule, { url: this.agentUrl, fetch: this.fetchImpl });
+      got = await understandRule(this.planCal(), text, rv.rule, { url: this.agentUrl, fetch: this.fetchImpl });
     } finally {
       if (id === this.requestId) this.busy = false;
     }
@@ -1625,7 +1712,7 @@ export class BoardSystem extends createSystem({
       return null;
     }
     const before = rv.candidates.map((c) => c.slot.id).join();
-    const next = refreshReview(this.cal, rv, got.constraint);
+    const next = refreshReview(this.planCal(), rv, got.constraint);
     const changed = next.candidates.map((c) => c.slot.id).join() !== before;
     const lostTrial = rv.trial !== null && next.trial === null;
     if (lostTrial && this.sendingUntil !== null) this.unsend();
@@ -1688,10 +1775,9 @@ export class BoardSystem extends createSystem({
 
   /** Re-plan the same task under a new rule (the meeting or the focus block). */
   private planWith(plan: Plan, rule: Constraint): Plan {
-    if (plan.moving) return makeMovePlan(this.cal, plan.moving, rule, ruleText(rule), plan);
-    return isFocus(plan)
-      ? makeFocusPlan(this.cal, rule, ruleText(rule), plan)
-      : makePlan(this.cal, rule, ruleText(rule), plan);
+    const cal = this.planCal();
+    if (plan.moving) return makeMovePlan(cal, plan.moving, rule, ruleText(rule), plan);
+    return isFocus(plan) ? makeFocusPlan(cal, rule, ruleText(rule), plan) : makePlan(cal, rule, ruleText(rule), plan);
   }
 
   /** You moved the agent's own pick: remember from where to where. */
@@ -2243,7 +2329,7 @@ export class BoardSystem extends createSystem({
         if (!slot) return false;
         const block = exampleBlock(this.cal, slot);
         this.exampleBlocks = [...this.exampleBlocks, block].slice(-EXAMPLE.maxBlocks);
-        this.loadSnapshot(withExample(this.cal, [block]));
+        this.loadSnapshot(this.withKeptExamples());
         return true;
       },
       setWatch: () => {},
